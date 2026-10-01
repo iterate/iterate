@@ -1,0 +1,432 @@
+// processor-facets.e2e.test.ts — THE FACET SPINE live: a processor is a userspace pure `StreamProcessor`
+// hosted by its one-line `StreamProcessorDurableObject` subclass in a real workerd facet on the context
+// DO (there are no built-in processors — `tally`, `user-tally`, `breaker` are fixture sources in
+// helpers/sources.ts). ENABLEMENT is a subscription row whose target is the facet's
+// processEventBatch (`processors.enable` is sugar over exactly that event; identity rides `ctx.props`
+// at materialization — rebuild-from-log is true). Pins:
+//   • cold catch-up (an event appended BEFORE enable is counted), driven reduces, the subscriptions
+//     table listing the processor (ONE row, `hostedFacet`, the source elided, NO cursor — a facet owns
+//     its progress); the facet ADDRESS through the built-in, through a rule of its own, the barrier
+//     verb, a name the facet does not expose rejecting raw; two userspace processors side by side
+//   • the refusals: a dotted name, no source, the core reduce's name at either entry point (core's
+//     slice names `rewrite-rules` / `subscriptions` are ordinary facet names)
+//   • the raw event-sourced form agrees with the verb, both ways: a hand-appended
+//     subscription-configured IS the enablement; `{ target: null }` deletes the hosted facet, storage
+//     included, and a re-enable rebuilds from the log
+//   • a two-session enable race yields ONE lineage with exact counts; re-enable while WARM with the
+//     SAME spec appends NOTHING (idempotent at enable — every entity's `create()` enables its row on
+//     every call) and never corrupts the reduce; double-enable then ONE disable disables (no
+//     enablement stack)
+//   • `waitUntilProcessed(future offset)` times out with its documented error and leaks no waiter
+//   • POLICY IS A FACET PROCESSOR: the token-bucket breaker (`SOURCES.breaker` — a pure reduce spending
+//     one token per durable non-control event, refilled from the EVENT's createdAt, replayable) trips
+//     exactly on the crossing by appending `itx/paused` with its reason and provenance; core knows
+//     nothing about breakers (the pause check reads the reduced `paused` slice); appends then refuse
+//     STREAM_PAUSED; an operator's plain `itx/resumed` restores flow
+// (The two pins that read the worker's console — a quiet enable is clean, disable mid-drive raises no
+// error storm — are push-delivery-no-dropped-warns.e2e, which owns a worker of its own; a stale
+// subscribe handle's compare-and-set undo is vitest/os-workers/do-entry-points.test.ts.)
+
+import { expect, test } from "vitest";
+import { errorCode } from "iterate/lib";
+import {
+  BIRTH_ROW_NAMES,
+  durableCountsByType,
+  freshCtx,
+  openItx,
+  processorNames,
+  readAll,
+  readHead,
+  rejection,
+  subscriptions,
+  tallySnapshot,
+  until,
+} from "../../helpers/client.ts";
+import { enableFixtureProcessor, SOURCES } from "../../helpers/sources.ts";
+
+// ── the spine: reduces and the facet address ──
+
+test("facet spine: cold catch-up + driven reduces + the subscriptions table lists the processor", async () => {
+  const itx = openItx(freshCtx("facet"));
+
+  // one rewrite rule BEFORE enabling — the facet must count it via cold catch-up
+  await itx.provide("itx.before", "itx.kv");
+
+  await enableFixtureProcessor(itx, "tally");
+  const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
+  // Cold catch-up counts the pre-enable rule, the context's birth rows and tally's own enablement.
+  // The last are subscriptions, NOT rewrite rules (an enablement is a subscription).
+  expect(s1.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
+  expect(s1.state?.counts?.["events.iterate.com/itx/subscription-configured"]).toBe(
+    BIRTH_ROW_NAMES.size + 1,
+  );
+
+  // two more rules + one un-set AFTER enabling — the push path
+  await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
+  await itx.provide("itx.a", null);
+
+  const s2 = await itx.invoke("itx.facets.get('tally').snapshot()");
+  // the facet reduces the pushed events (3 sets + 1 un-set, all rewrite-rule-configured). Its
+  // checkpoint sits at or past the 8 durable events (created, woken, config, before, configured, a,
+  // b, a-unset) — live-state deltas are ephemerals in the SAME offset space, so the exact position
+  // depends on how many the core reduce emitted; the counts pin the real reduce.
+  expect(s2.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(4);
+  expect(s2.offset).toBeGreaterThanOrEqual(8);
+
+  // the subscriptions table lists the processor: ONE row whose target is the facet's
+  // processEventBatch, and NO cursor — the facet keeps its own checkpoint. The SOURCE is elided
+  // from the reduced target (it lives in the log + the facet's kv memo); the row carries a
+  // `hostedFacet` marker with the class instead.
+  expect(await processorNames(itx)).toEqual(["tally"]);
+  const row = (await subscriptions(itx)).find((r: { name: string }) => r.name === "tally");
+  expect(row).toMatchObject({
+    target: "itx.builtins.facets.get('tally').processEventBatch", // the platform's spelling, minus the source
+    hostedFacet: { name: "tally", className: "TallyDurableObject", restarts: 0 },
+  });
+  expect(row.cursor).toBeUndefined();
+});
+
+test("facet address: the built-in address, a rewrite rule onto it, barrier verb, probe-resistance", async () => {
+  const itx = openItx(freshCtx("addr"));
+  await enableFixtureProcessor(itx, "tally");
+  await itx.invoke(`itx.append({ type: 'mark' })`);
+
+  // 1. a facet method through the `facets` built-in
+  const snap = await itx.invoke(`itx.facets.get('tally').snapshot()`);
+  expect(snap?.state?.counts?.mark).toBe(1);
+
+  // 2. the barrier verb through the same address — its resolving without throwing IS the proof
+  await itx.invoke(`itx.facets.get('tally').waitUntilProcessed({ offset: 1, timeoutMs: 5000 })`);
+
+  // 3. a userspace REWRITE RULE onto the facet address (the address is an ordinary expression)
+  await itx.provide("itx.counts", "itx.facets.get('tally')");
+  const rewritten = await itx.invoke(["itx", "counts", ["snapshot"]]);
+  expect(rewritten?.state?.counts?.mark).toBe(1);
+  await itx.provide("itx.counts", null);
+
+  // 4. a name the facet does not expose rejects — in the RPC receiver's own words (no probe-defense
+  //    layer in between: trusted clients, expression.ts)
+  await expect(itx.invoke(`itx.facets.get('tally').toString()`)).rejects.toThrow();
+});
+
+test("two userspace facet processors reduce side-by-side — user-tally and tally", async () => {
+  const itx = openItx(freshCtx("ufacet"));
+
+  // both classes arrive via the loader from their INLINE source — the one way to host a processor
+  await enableFixtureProcessor(itx, "user-tally");
+  await enableFixtureProcessor(itx, "tally");
+
+  // 2 rule sets + 1 un-set
+  await itx.provide("itx.a", "itx.kv");
+  await itx.provide("itx.b", "itx.kv");
+  await itx.provide("itx.a", null);
+
+  // Both reduce the same 7 durable events (created, woken, 2 configured, 3 rewrite-rule-configured).
+  // An enablement is one subscription-configured event, not a rewrite rule.
+  // Checkpoints sit at or past offset 7 (live-state deltas share the offset space).
+  const su = await itx.invoke("itx.facets.get('user-tally').snapshot()");
+  expect(su.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(3);
+  expect(su.offset).toBeGreaterThanOrEqual(7);
+
+  const sb = await itx.invoke("itx.facets.get('tally').snapshot()");
+  expect(sb.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(3);
+  expect(sb.offset).toBeGreaterThanOrEqual(7);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a count only one processor has is a different reduce
+  expect(sb.state.counts).toEqual(su.state.counts); // the same reduce over the same log
+
+  // the subscriptions table lists both processors (rows whose target is a facet's processEventBatch)
+  expect((await processorNames(itx)).sort()).toEqual(["tally", "user-tally"]);
+});
+
+// ── enablement is a row: the entry points, the lineage, the barrier ──
+
+// ── the refusals ──
+
+test("processors.enable rejects a name that is not ONE segment (a dotted name)", async () => {
+  // A processor's name is its facet name, its subscription name, its `.get(name)` name — ONE
+  // segment ([A-Za-z0-9_-]+). "a.b" is refused at enable instead of being re-segmented by a path
+  // grammar into an orphan no delivery would ever reach.
+  const itx = openItx(freshCtx("dotname"));
+  await expect(
+    (async () => {
+      await itx.processors.enable("a.b", {
+        source: SOURCES.tally,
+        className: "TallyDurableObject",
+      });
+    })(),
+  ).rejects.toThrow(/one segment/);
+  expect(await subscriptions(itx)).toEqual([]);
+});
+
+test("processors.enable REQUIRES a source ref — there are no built-in processors to name", async () => {
+  const itx = openItx(freshCtx("nosource"));
+  await expect(
+    (async () => {
+      await itx.processors.enable("no-such-builtin");
+    })(),
+  ).rejects.toThrow();
+  expect(await subscriptions(itx)).toEqual([]);
+});
+
+test("the core reduce's name is refused at BOTH entry points — never a facet to enable or disable; the names of core's slices (rewrite-rules, subscriptions) are ordinary facet names", async () => {
+  // `core` is THE inline reduce — always on, never a facet — and its address
+  // (`itx.facets.get('core')`) is taken, so its name is refused at both entry points: a processor that ran
+  // under it could never be addressed or disabled by name. Nothing else is reserved: core's slices
+  // have no facet address of their own, so `rewrite-rules` and `subscriptions` are plain names a
+  // processor may take, address and drop like any other.
+  const itx = openItx(freshCtx("inline"));
+  expect((await rejection(itx.processors.disable("core"))).message).toMatch(/core reduce/);
+  await expect(
+    (async () => {
+      await itx.processors.enable("core", {
+        source: SOURCES.tally,
+        className: "TallyDurableObject",
+      });
+    })(),
+  ).rejects.toThrow(/core reduce/);
+  for (const name of ["rewrite-rules", "subscriptions"]) {
+    await itx.processors.enable(name, {
+      source: SOURCES.tally,
+      className: "TallyDurableObject",
+    });
+    const [mark] = await itx.append({ type: "mark", payload: { name } });
+    const snap: any = await until(`${name} reduced the mark`, async () => {
+      const s: any = await itx
+        .invoke(`itx.facets.get('${name}').snapshot()`)
+        .catch(() => undefined); // NO_FACET while it materializes
+      return s && s.offset >= mark.offset && s;
+    });
+    expect(snap.state.counts.mark).toBeGreaterThanOrEqual(1); // a tally, addressed under a core slice's name
+    await itx.processors.disable(name);
+    await expect(itx.invoke(`itx.facets.get('${name}').snapshot()`)).rejects.toThrow(/no facet/);
+  }
+  expect(await subscriptions(itx)).toEqual([]);
+});
+
+// ── the row IS the enablement ──
+
+test("the raw event-sourced form agrees with the verb — a hand-appended subscription-configured naming the facet's processEventBatch IS the enablement", async () => {
+  const itx = openItx(freshCtx("rawevent"));
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "tally",
+      target: [
+        "itx",
+        "facets",
+        ["get", "tally", { source: SOURCES.tally, className: "TallyDurableObject" }],
+        "processEventBatch",
+      ],
+    },
+  });
+  expect(await processorNames(itx)).toEqual(["tally"]); // listed as enabled — and it is
+  const [mark] = await itx.append({ type: "mark" });
+  const snap: any = await until("tally reduced the mark", async () => {
+    const s: any = await tallySnapshot(itx).catch(() => undefined); // NO_FACET while it materializes
+    return s && s.offset >= mark.offset && s;
+  });
+  expect(snap.state.counts).toMatchObject({ mark: 1 });
+});
+
+test("processors.enable('tally') from two sessions concurrently: one effective lineage, exact counts, the table lists tally once", async () => {
+  const ctx = freshCtx("dualenable");
+  const itxA = openItx(ctx);
+  const itxB = openItx(ctx);
+  await Promise.all([enableFixtureProcessor(itxA, "tally"), enableFixtureProcessor(itxB, "tally")]);
+
+  // same name REPLACES (no stack): the racing enables landed one or two configured events — the
+  // enable appends nothing for a row already in the table, and a race may or may not see it — and the
+  // table holds ONE row named tally
+  expect((await processorNames(itxA)).filter((s) => s === "tally")).toHaveLength(1);
+
+  for (let i = 0; i < 3; i++) await itxA.append({ type: "seen", payload: { i } });
+  const head = await readHead(itxA);
+  const expected = durableCountsByType(await readAll(itxA));
+  expect([1, 2].map((enables) => BIRTH_ROW_NAMES.size + enables)).toContain(
+    expected["events.iterate.com/itx/subscription-configured"],
+  );
+  const snap = await until("tally reduced the whole log exactly once", async () => {
+    const s: any = await tallySnapshot(itxA);
+    return s.offset >= head && s;
+  });
+  // one lineage: bit-exact counts (a doubled drive or a second lineage would overcount; a
+  // dropped one would undercount)
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra count is a second lineage
+  expect(snap.state.counts).toEqual(expected);
+  expect(snap.state.counts).toMatchObject({ seen: 3 });
+});
+
+test("re-enable while WARM with the same spec appends NOTHING (idempotent at enable) and never corrupts the reduce (no reset, no double-count)", async () => {
+  const itx = openItx(freshCtx("reenable"));
+  await enableFixtureProcessor(itx, "tally");
+  await itx.append({ type: "mark" });
+  await itx.append({ type: "mark" });
+  const head1 = await readHead(itx);
+  const s1: any = await until("tally at head", async () => {
+    const s: any = await tallySnapshot(itx);
+    return s.offset >= head1 && s;
+  });
+  expect(s1.state.counts).toMatchObject({ mark: 2 });
+
+  const configuredEvents = async () =>
+    (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
+      .length;
+  const configuredBefore = await configuredEvents();
+  await enableFixtureProcessor(itx, "tally"); // the same row again ⇒ nothing appended: enable answers from the table
+  expect(await configuredEvents()).toBe(configuredBefore);
+  expect((await processorNames(itx)).filter((s) => s === "tally")).toHaveLength(1);
+  await itx.append({ type: "mark" });
+  const head2 = await readHead(itx);
+  const expected = durableCountsByType(await readAll(itx));
+  const s2: any = await until("tally at head after re-enable", async () => {
+    const s: any = await tallySnapshot(itx);
+    return s.offset >= head2 && s;
+  });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra count is a lineage the re-enable kept
+  expect(s2.state.counts).toEqual(expected); // exact — the re-enable neither reset nor doubled
+  expect(s2.state.counts).toMatchObject({ mark: 3 });
+});
+
+test("double-enable then ONE processors.disable disables it (same name REPLACES — there is no enablement stack to clear)", async () => {
+  const itx = openItx(freshCtx("disshadow"));
+  await enableFixtureProcessor(itx, "tally");
+  await enableFixtureProcessor(itx, "tally"); // re-enable while WARM (supported: one more configured event replaces the row)
+  await itx.append({ type: "mark" });
+  const head = await readHead(itx);
+  await until("tally at head", async () => ((await tallySnapshot(itx)) as any).offset >= head);
+
+  await itx.processors.disable("tally"); // ONE disable
+
+  expect(await processorNames(itx)).not.toContain("tally");
+  expect(await subscriptions(itx)).toEqual([]);
+  await expect(tallySnapshot(itx)).rejects.toThrow(/no facet.*"tally"/);
+});
+
+// ── the barrier ──
+
+test("waitUntilProcessed(future offset) times out with its documented error and leaks no waiter", async () => {
+  const itx = openItx(freshCtx("barrier"));
+  await enableFixtureProcessor(itx, "tally");
+  await itx.append({ type: "mark" });
+  const head = await readHead(itx);
+  await until("tally at head", async () => ((await tallySnapshot(itx)) as any).offset >= head);
+
+  const t0 = Date.now();
+  await expect(
+    itx.invoke([
+      "itx",
+      "facets",
+      ["get", "tally"],
+      ["waitUntilProcessed", { offset: head + 50, timeoutMs: 1500 }],
+    ]),
+  ).rejects.toThrow(/did not reach offset/);
+  const elapsed = Date.now() - t0;
+  expect(elapsed).toBeGreaterThanOrEqual(1_200); // it genuinely waited
+  expect(elapsed).toBeLessThan(8_000); // and rejected at ITS deadline, not a transport one
+
+  // a LATER append releases nothing stale: the barrier still works exactly
+  const [m] = await itx.append({ type: "mark" });
+  await itx.invoke([
+    "itx",
+    "facets",
+    ["get", "tally"],
+    ["waitUntilProcessed", { offset: m.offset, timeoutMs: 5000 }],
+  ]);
+  const snap: any = await tallySnapshot(itx);
+  expect(snap.offset).toBeGreaterThanOrEqual(m.offset);
+  expect(snap.state.counts).toMatchObject({ mark: 2 });
+});
+
+// ── the row's removal IS the disablement ──
+
+test("the raw event agrees with processors.disable — a hand-appended subscription-configured { target: null } deletes the facet the row HOSTED, storage included", async () => {
+  const itx = openItx(freshCtx("rawdisable"));
+  await enableFixtureProcessor(itx, "tally");
+  const [mark] = await itx.append({ type: "mark" });
+  await until("tally reduced the mark", async () => {
+    const s: any = await tallySnapshot(itx).catch(() => undefined);
+    return s && s.offset >= mark.offset && s;
+  });
+  // ONE event, no verb: the DO deletes the hosted facet before the append returns
+  await itx.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "tally", target: null },
+  });
+  expect(await processorNames(itx)).toEqual([]);
+  await expect(tallySnapshot(itx)).rejects.toThrow(/no facet/);
+  // a re-enable is a clean rebuild from the log (the mark above is counted once, from offset 0)
+  await enableFixtureProcessor(itx, "tally");
+  const rebuilt: any = await until("tally rebuilt from the log", async () => {
+    const s: any = await tallySnapshot(itx).catch(() => undefined);
+    return s && s.offset >= mark.offset && s;
+  });
+  expect(rebuilt.state.counts).toMatchObject({ mark: 1 });
+});
+
+// ── policy as a facet processor: the breaker pauses the stream ──
+
+test("a burst past the breaker's capacity pauses the stream (the facet appends `paused` with its reason); appends refuse with STREAM_PAUSED; an operator's `resumed` restores flow", async () => {
+  const itx = openItx(freshCtx("breaker"));
+  // processors.enable("breaker", { source: SOURCES.breaker, className: "BreakerDurableObject" })
+  await enableFixtureProcessor(itx, "breaker");
+  // The breaker's own enablement (subscription-configured) is a durable non-control event: the bucket
+  // (capacity 5) is at 4 once it has reduced its own row. Nothing paused yet.
+  await itx.append({ type: "warm" }); // 3 left
+  expect((await readAll(itx)).some((e) => e.type === "events.iterate.com/itx/paused")).toBe(false);
+
+  // ONE batch of 8 durable events — more than the bucket holds. The crossing happens mid-batch; the
+  // breaker's processEvent trips exactly once (the crossing), appending `paused`.
+  const burst = await itx.append(
+    ...Array.from({ length: 8 }, (_, i) => ({ type: "burst", payload: { i } })),
+  );
+  expect(burst).toHaveLength(8); // the burst itself was admitted — policy reads the REDUCE, after the commit
+  const paused = await itx.waitForEvent({
+    type: "events.iterate.com/itx/paused",
+    afterOffset: 0,
+    timeoutMs: 20_000,
+  });
+  expect(paused).toMatchObject({
+    payload: { reason: "breaker: durable events exceeded the bucket" },
+  });
+  // provenance: the engine stamps every processor emit with its slug — the log says WHO paused it
+  expect(paused.source?.processor).toMatchObject({ slug: "breaker", version: "1.0.0" });
+  expect(paused.source?.processor?.whileProcessing?.type).toBe("burst");
+  expect(paused.idempotencyKey).toMatch(/^breaker\/trip@\d+$/); // a replay can never double-pause
+
+  // the stream is paused: a further append is refused, coded, with the breaker's reason
+  const err = await rejection(itx.append({ type: "more" }));
+  expect(errorCode(err)).toBe("STREAM_PAUSED");
+  expect(err.message).toContain("stream paused: breaker: durable events exceeded the bucket");
+  // the core snapshot shows the same truth
+  const core = await itx.invoke("itx.facets.get('core').snapshot()");
+  expect(core.state).toMatchObject({
+    paused: { reason: "breaker: durable events exceeded the bucket" },
+  });
+  // Inspect the debt while paused: after resuming, later events refill the bucket by event time.
+  const snap = await itx.invoke("itx.facets.get('breaker').snapshot()");
+  expect(snap.state.tokens).toBeLessThan(0);
+  expect(snap.state.lastAtMs).toBeGreaterThan(0);
+
+  // the operator's recovery is a plain control append — resume always lands on a paused stream
+  await itx.append({ type: "events.iterate.com/itx/resumed" });
+  const [after] = await itx.append({ type: "after" });
+  expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
+  // Resuming does not cause another trip: the ONE crossing is the only `paused` in the log.
+  expect(
+    (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/paused"),
+  ).toHaveLength(1);
+});
+
+// ── the processors ROOT is the third layer on subscriptions: list() is the rows that host a facet ──
+
+test("itx.processors.list() is the subscriptions that host a facet — an enabled fixture appears with its hostedFacet and leaves with processors.disable", async () => {
+  const itx = openItx(freshCtx("plist"));
+  expect(await itx.processors.list()).toEqual([]);
+  await enableFixtureProcessor(itx, "tally");
+  const rows = await itx.processors.list();
+  expect(rows.map((row: any) => row.name)).toEqual(["tally"]);
+  expect(rows[0].hostedFacet).toMatchObject({ name: "tally", className: "TallyDurableObject" });
+  await itx.processors.disable("tally");
+  expect(await itx.processors.list()).toEqual([]);
+});

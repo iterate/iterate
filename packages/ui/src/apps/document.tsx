@@ -12,7 +12,7 @@ export function AppDocument(props: {
   basePath?: string;
 }) {
   // false in the server's HTML, true once React owns the page: the specs' hydration-waiter
-  // (specs/AGENTS.md) holds actions until then
+  // (test/playwright/AGENTS.md) holds actions until then
   const hydrated = useHydrated();
   const basePath = props.basePath || "";
   return (

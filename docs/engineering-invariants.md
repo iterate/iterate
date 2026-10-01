@@ -21,7 +21,7 @@ resource leaks.
   only while a [`createFailing`](testing.md#pinned-bugs-createfailingtest--not-bare-testfails)
   test pins the defect, so the pin goes red once upstream fixes it. The
   exception is a defect too rare to reproduce in a test, such as the held
-  Durable Object alarm ([alarm-coordinator.ts](../apps/os/src/alarm-coordinator.ts)).
+  Durable Object alarm ([alarm-coordinator.ts](../core/os/src/alarm-coordinator.ts)).
   Its heal's absence from prd is the pin: `PINNED_WORKAROUNDS` in the prd fault
   alarm posts once after 28 days without it. An upstream defect that only logs
   an error line, where no call failed, gets no workaround: a `createFailing`
@@ -43,7 +43,7 @@ signal. "Unavoidable error spam" is not a category.
 
 Every failure is one of five kinds. The hop that first sees it decides the
 kind (`failureKind` in
-[platform-retry.ts](../packages/iterate/src/platform-retry.ts)), and the kind
+[platform-retry.ts](../core/lib/src/platform-retry.ts)), and the kind
 rides on as own properties, which Workers RPC and capnweb keep.
 
 | Kind           | Recognized by                                                                                                                                                                                                                                                                                                                                     | Repeated                                                                                                                                          | Answered as            |
@@ -60,13 +60,13 @@ rides on as own properties, which Workers RPC and capnweb keep.
   method that names its whole end state. A request answered 429 was refused
   unrun, so a script sends it again whatever its method, and so does the e2e
   transport with one Cloudflare answered not routed yet (`isNotRoutedYet`,
-  [not-routed.ts](../apps/os/e2e/support/not-routed.ts)). `contextStub`
-  ([context-stub.ts](../apps/os/src/context-stub.ts)) applies this to every
+  [not-routed.ts](../test/helpers/not-routed.ts)). `contextStub`
+  ([context-stub.ts](../core/os/src/context-stub.ts)) applies this to every
   call the platform makes on a context Durable Object, whichever hop makes it.
 - **Schedules come from one short list**: `ONCE_NOW`, `UPSTREAM_ONCE`,
   `RELAY_BURST`, `CI_HTTP`, `CLOUDFLARE_API`, the durable ladder (1 s·2ⁿ,
   capped at 30 minutes), and the socket re-dial
-  ([redial.ts](../apps/os/src/context/redial.ts): at once, then 250 ms doubling
+  ([redial.ts](../core/os/src/context/redial.ts): at once, then 250 ms doubling
   to 8 s, within the caller's deadline of the drop: 60 s for a lent stub's pager,
   30 s for a resumable upgrade). Each schedule is bounded, each wait but the
   re-dial's is jittered, and giving up on an idempotent call is logged once. A
@@ -75,7 +75,7 @@ rides on as own properties, which Workers RPC and capnweb keep.
   attempt that gets no answer in time is our own deadline, an overload.
 - **A platform failure that stands crosses a hop as `UNAVAILABLE`**, its
   `data` `{ kind, retryAfterMs }`, and the edge answers it 503 with that
-  `Retry-After` ([unavailable.ts](../apps/os/src/unavailable.ts)). "Never retry
+  `Retry-After` ([unavailable.ts](../core/os/src/unavailable.ts)). "Never retry
   this" is a code (`PERMANENT_FAILURE`, or the refusal's own), never
   `retryable: false`: workerd never sets it.
 - **One event naming rule, `<module>.<outcome>`.** A deploy's reset is

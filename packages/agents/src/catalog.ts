@@ -35,7 +35,7 @@ export class AgentCatalogProcessor extends StreamProcessor<
 > {
   readonly contract = AgentCatalogContract;
   /** A certificate counts only from the agent it names: each agent writes its own on `/`
-   *  (processor.ts), and the platform stamps where it came from (apps/os caller.ts `stampCaller`),
+   *  (processor.ts), and the platform stamps where it came from (core/os caller.ts `stampCaller`),
    *  so one any other context appends is ignored — anyone may append anywhere, and a forged death
    *  would refuse the agent's every message for good. */
   reduce({

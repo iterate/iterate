@@ -1,12 +1,12 @@
 // The installed catalog delegates project capabilities to each agent.
 //
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
-// `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
+// `ctx.facets.delete` taking the facet's storage with it (core/os context/facet-host.ts
 // `#deleteFacet`); a verb on a dead agent answers from the catalog's `deleted` row on `/`
 // (catalog.ts), never by `facets.get("agent", spec)` on its context. That call would host the facet
 // again (a new database folded from the whole log, an instance that can run on past the context's
-// incarnation), and aborting a running loaded facet resets a whole Durable Object (apps/os
-// context/residency.ts, the birth reset; apps/os e2e/facet-abort-storage-reset.e2e.test.ts
+// incarnation), and aborting a running loaded facet resets a whole Durable Object (core/os
+// context/residency.ts, the birth reset; core/os e2e/facet-abort-storage-reset.e2e.test.ts
 // measures it).
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
@@ -20,7 +20,7 @@ import { agentsFacetSpec } from "./install.ts";
 /** How long `create` and `delete` wait for the agent's certificate in all. */
 const CERTIFICATE_WAIT_MS = 30_000;
 /** How long ONE call on the agent's context waits before it is asked again on a fresh call, so an
- *  instance Cloudflare replaces under the wait costs one slice (apps/os project/collection.ts
+ *  instance Cloudflare replaces under the wait costs one slice (core/os project/collection.ts
  *  `TERMINAL_WAIT_SLICE_MS` says why). */
 const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 
@@ -68,7 +68,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     // reached it — and never to a context `create` names: a script could otherwise link its child
     // above its own masks. The base itself is still the caller's to choose through the public
     // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-    // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
+    // test/vitest/agents/inherited-capabilities.e2e.test.ts.
     const creator = resolveContextPath("/", this.base);
     // Writing a parent link on an ancestor would point back down to its child.
     // Refuse before loading a facet or changing any context rows.
@@ -118,7 +118,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
           `agent-collection:${path}`,
         ),
       );
-      // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
+      // Append-result cast: see core/os/src/project/collection.ts for the loopback RPC typing
       // rationale.
       const [requested] = (await context.append({
         type: "events.iterate.com/agent/create-requested",
@@ -183,7 +183,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       let requestedAtOffset: number;
       if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
       else {
-        // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
+        // Append-result cast: see core/os/src/project/collection.ts for the loopback RPC typing
         // rationale.
         const [requested] = (await context.append({
           type: "events.iterate.com/agent/delete-requested",
@@ -198,7 +198,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         requestedAtOffset,
       );
     }
-    // Disable last, including on retries; see apps/os/src/project/collection.ts for the
+    // Disable last, including on retries; see core/os/src/project/collection.ts for the
     // deletion-order rationale.
     if ((await rows()).some((row) => row.name === "agent"))
       await context.processors.disable("agent");
@@ -207,7 +207,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
 }
 
 /** The first of `types` on the agent's log after `afterOffset`, waited for CERTIFICATE_WAIT_MS in
- *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call: apps/os project/collection.ts
+ *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call: core/os project/collection.ts
  *  `#terminalFact`'s wait, whose doc says why the wake record rides along. */
 async function agentCertificate(
   context: { waitForEvent(filter: object): unknown },

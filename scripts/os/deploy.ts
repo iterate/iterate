@@ -4,18 +4,19 @@ import { OS_DOPPLER_PROJECT, getOsEnv } from "../../envs.ts";
 import { deployApp } from "../lib/deploy-app.ts";
 import { appConfigSecretsOf } from "../lib/deploy-helpers.ts";
 import type { EnvContext } from "../lib/env-context.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
-import { build, viteBuildOs } from "../../apps/os/scripts/build.ts";
-import { viteWranglerConfig } from "../../apps/os/scripts/generate-wrangler-config.ts";
-import { osResourceNames, type OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
+import { build, viteBuildOs } from "../../core/os/scripts/build.ts";
+import { viteWranglerConfig } from "../../core/os/scripts/generate-wrangler-config.ts";
+import { osResourceNames, type OsDeployableEnv } from "../../core/os/scripts/os-env.ts";
 import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
-} from "../../apps/os/scripts/preview-github-app.ts";
+} from "../../core/os/scripts/preview-github-app.ts";
+import { configTemplates } from "./config-templates.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
 
-/** Deploy apps/os to `--env`, any name envs.ts `getOsEnv` knows: `prd` (Deploy OS), `preview` (main on
+/** Deploy core/os to `--env`, any name envs.ts `getOsEnv` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/os/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
  *  scripts/os/preview.ts `deploy`). */
 export default async function deploy(options: {
@@ -28,8 +29,8 @@ export default async function deploy(options: {
   await deployApp(env, {
     dopplerProject: OS_DOPPLER_PROJECT,
     withoutRoutes: options.withoutRoutes,
-    appRoot: fileURLToPath(new URL("../../apps/os/", import.meta.url)),
-    appLabel: "apps/os",
+    appRoot: fileURLToPath(new URL("../../core/os/", import.meta.url)),
+    appLabel: "core/os",
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The configuration is checked first, as the Worker will read it: the generated vars and these
@@ -42,7 +43,7 @@ export default async function deploy(options: {
     async prepare(ctx, secretValues, credentials) {
       // every APP_CONFIG* var in the Doppler config, not only the two required below
       Object.assign(secretValues, appConfigSecretsOf(ctx.secrets));
-      // The pet shop's GitHub fake as iterate's GitHub App (apps/os/scripts/generate-wrangler-config.ts has the other
+      // The pet shop's GitHub fake as iterate's GitHub App (core/os/scripts/generate-wrangler-config.ts has the other
       // fakes): its throwaway key is Doppler `os/preview`'s, so the App ships as a secret, not a var.
       if (ctx.env.petshopOrigin)
         secretValues.APP_CONFIG_INTEGRATIONS__GITHUB = JSON.stringify({
@@ -55,7 +56,7 @@ export default async function deploy(options: {
         ...secretValues,
       });
       const [, databaseId] = await Promise.all([
-        build(),
+        build({ templates: configTemplates(fileURLToPath(new URL("../..", import.meta.url))) }),
         ctx.env.resources?.dbId || createResources(ctx),
       ]);
       await applyD1Migrations(ctx.cf, {
@@ -67,7 +68,7 @@ export default async function deploy(options: {
         },
       });
     },
-    // the deployment itself, not its name: apps/os looks none up (apps/os/scripts/build.ts `viteBuildOs`)
+    // the deployment itself, not its name: core/os looks none up (core/os/scripts/build.ts `viteBuildOs`)
     build: () => viteBuildOs(env),
     smokes: [
       {
@@ -94,7 +95,7 @@ export default async function deploy(options: {
   });
 }
 /** A per-commit deployment's D1, R2 bucket and Artifacts namespace, by the names its config binds
- *  (apps/os/scripts/generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
+ *  (core/os/scripts/generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
  *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
  *  scripts/os/preview-delete.ts `deletePreviewDeployments`. */

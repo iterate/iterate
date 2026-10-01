@@ -1510,9 +1510,9 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
       [],
       [],
       [
-        `✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no \`iterate-context.platform-failure-alarm-*\` since 2026-09-23 (28 days) ${mentions}`,
-        `✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (\`isFacetStartPlatformFailure\`). prd has logged no \`facet.platform-failure-*\` since 2026-09-23 (28 days) ${mentions}`,
-        `✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts. prd has logged no \`workers.platform-failure-*\` since 2026-09-23 (28 days) ${mentions}`,
+        `✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in core/os/src/alarm-coordinator.ts. prd has logged no \`iterate-context.platform-failure-alarm-*\` since 2026-09-23 (28 days) ${mentions}`,
+        `✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in core/os/src/context/facet-host.ts (\`isFacetStartPlatformFailure\`). prd has logged no \`facet.platform-failure-*\` since 2026-09-23 (28 days) ${mentions}`,
+        `✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in core/os/src/context/built-ins.ts. prd has logged no \`workers.platform-failure-*\` since 2026-09-23 (28 days) ${mentions}`,
       ],
       [],
       [],
@@ -1873,7 +1873,7 @@ function line(options: {
   };
 }
 
-/** The warn the visitor's own invocation logs when the edge answers a platform failure 503 (apps/os
+/** The warn the visitor's own invocation logs when the edge answers a platform failure 503 (core/os
  *  src/worker.ts `platformFailureAnswer`). */
 function platformFailureAnswered(rayId: string, url: string) {
   return {
@@ -1937,7 +1937,7 @@ function failedDocsRequest() {
   ];
 }
 
-/** The context DO `objectId` announcing an outcome at info with its message (apps/os
+/** The context DO `objectId` announcing an outcome at info with its message (core/os
  *  iterate-context-durable-object.ts `#abort`), then the error line the runtime logs for it in the
  *  same invocation and that invocation's jsrpc summary, as a preview logged its `itx.abort()` on
  *  2026-09-29 09:56. */
@@ -1969,7 +1969,7 @@ function rejectedInFlight(objectId: string, requestId: string, message: string) 
   ];
 }
 
-/** The context DO `objectId` deleting its `secret` facet, as apps/os context/facet-host.ts
+/** The context DO `objectId` deleting its `secret` facet, as core/os context/facet-host.ts
  *  `#deleteFacet` announces it: at info, with the summary of a call session the deletion cuts off. */
 function deletedSecretFacet(objectId: string) {
   return {
@@ -2024,7 +2024,7 @@ function closeReset(requestId: string) {
   ];
 }
 
-/** An rpc-stub pager that re-dialed after its socket closed (apps/os context/rpc-stub-relay.ts). */
+/** An rpc-stub pager that re-dialed after its socket closed (core/os context/rpc-stub-relay.ts). */
 function pagerRedialed() {
   return {
     timestamp: 42,

@@ -1,5 +1,5 @@
 // /projects/<project>/ — the overview: the project, its role, its site — and, while the project's own
-// creation runs, where it stands: the `project` facet's LIVE STATE on `/` (apps/os/src/project/),
+// creation runs, where it stands: the `project` facet's LIVE STATE on `/` (core/os/src/project/),
 // rendered as a creation checklist until `project/created` lands, or as the failure the
 // processor reported. The frame the project's own pages fill in over time. Its organization's owner
 // deletes the project here (`session.projects.delete`). The config repo's remote is linked, pulled

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 // One neutral ES module per export. `iterate` and `zod` stay imports: a loaded worker binds them to
-// the platform's own modules (apps/os context/module-resolution.ts), and `@babel/parser` and `yaml`
+// the platform's own modules (core/os context/module-resolution.ts), and `@babel/parser` and `yaml`
 // load as this package's dependencies.
 export default defineConfig({
   entry: { index: "src/index.ts", install: "src/install.ts" },

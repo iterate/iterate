@@ -9,7 +9,7 @@
  *
  * This is the shape that lets the pet shop be consumed as a real typed/OpenAPI
  * upstream by the OS's `itx.connectToOpenApi`
- * (apps/os/e2e/library-connectors.e2e.test.ts).
+ * (test/vitest/os/library-connectors.e2e.test.ts).
  */
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";

@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 
 // Every `events.iterate.com/…` literal in a tracked file names `<namespace>/<event>`: an allowed
 // namespace, a lowercase kebab-case event, never a third segment. The rules:
-// packages/iterate/README.md#event-types. A template (`events.iterate.com/${x}`) or a placeholder
+// core/lib/README.md#event-types. A template (`events.iterate.com/${x}`) or a placeholder
 // (`<namespace>`, `…`, `*`) is skipped, and so is the AI linter's fixture of labelled code from
 // past pull requests, whose text must stay as it was measured.
 

@@ -67,7 +67,7 @@ type Row = z.infer<typeof AnalyticsEngineAnswer>["data"][number];
 
 /** Every panel's rows and the census, or null without a metrics token, for a platform admin alone: this browser's
  *  session at the deployment's own issuer holds the `admin` scope, which that issuer grants to its
- *  `admins` only (apps/os consent.ts). A session connected to another issuer could hold any scope. */
+ *  `admins` only (core/os consent.ts). A session connected to another issuer could hold any scope. */
 const readPanels = createServerFn({ method: "GET" })
   .inputValidator(Hours)
   .handler(async ({ data: hours }) => {

@@ -4,8 +4,8 @@
 
 Four Iceberg tables in one R2 bucket per Cloudflare account — `events`, `logs`, `spans`,
 `metrics` — are written by Cloudflare Pipelines and read with R2 SQL or DuckDB. The platform hook
-in `apps/os` sends every durable event to the `events` stream; Cloudflare's OTLP export posts
-`apps/os`'s logs and spans to `apps/telemetry`, which flattens them into the `logs` and `spans`
+in `core/os` sends every durable event to the `events` stream; Cloudflare's OTLP export posts
+`core/os`'s logs and spans to `apps/telemetry`, which flattens them into the `logs` and `spans`
 streams; `metrics.count/gauge/time` (`iterate/metrics`) write Analytics Engine data points, which
 the hourly health job copies into the `metrics` stream. Every row carries `time`, `worker`,
 `project_id` and `path`, and each table keeps everything else it has in one JSON column. Analytics
@@ -13,9 +13,9 @@ Engine serves live dashboards and alerts (90 days, sampled); the tables answer e
 few minutes behind.
 
 ```
-apps/os platform hook ─────────────────────────────────────────────────▶ events stream ─┐
-apps/os console.* and spans ─ OTLP export ─▶ apps/telemetry ─────▶ logs, spans streams ─┼─▶ sinks ─▶ Iceberg in R2 ─▶ R2 SQL, DuckDB
-apps/os iterate/metrics ─▶ Analytics Engine ─▶ health job, hourly ────▶ metrics stream ─┘
+core/os platform hook ─────────────────────────────────────────────────▶ events stream ─┐
+core/os console.* and spans ─ OTLP export ─▶ apps/telemetry ─────▶ logs, spans streams ─┼─▶ sinks ─▶ Iceberg in R2 ─▶ R2 SQL, DuckDB
+core/os iterate/metrics ─▶ Analytics Engine ─▶ health job, hourly ────▶ metrics stream ─┘
                            Analytics Engine ─▶ apps/admin /telemetry, health-job alerts
 ```
 
@@ -126,7 +126,7 @@ m.gauge("subscription.pending", pending, "row=config");
 m.time("subscription.delivery_ms", ms, "row=config");
 ```
 
-`WORKER_NAME` is a var every `apps/os` deployment's config sets, since the runtime does not tell a
+`WORKER_NAME` is a var every `core/os` deployment's config sets, since the runtime does not tell a
 Worker its own name. Each call is one `writeDataPoint`, which never blocks and is never awaited: `index1` is the
 project, so a busy project cannot crowd out a quiet one's samples, and `blob1…6` are name, kind,
 worker, project, path and labels (a layout that can only grow at the end). An invocation may write

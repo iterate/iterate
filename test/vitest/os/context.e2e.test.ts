@@ -1,0 +1,262 @@
+// context.e2e.test.ts — the CONTEXT across the /api hop: its built-in roots, the error grammar, and the
+// natural dotted client surface — deep dotted itx expressions as PLAIN PROPERTY ACCESS on the capnweb
+// stub (`itx.slack.chat.postMessage({...})`, `itx.kv.put('k','v')`): only fixed members are real
+// methods along the path; the prototype hop (iterate/expression.ts) turns every unknown segment into
+// ONE accumulated `invoke(expression)` dispatch. Pins:
+//   • a project label outside the DNS grammar is not a project host — the edge names no DO for it
+//     and answers 421 (never the control plane); the codec's own charset gate is the unit suite's
+//   • `cd('')` is SELF — an in-process call on this very context, never a self-RPC hop or a twin DO
+//   • a default-deny miss and a paused-stream refusal each carry their machine-readable `code` end to
+//     end (lib.ts: classify by code, never by message — own props survive DO → relay → client)
+//   • the explicit form `invoke(['itx', ['whoami']])`, the root dotted call, depth-2 built-ins, a dotted
+//     write beside an expression read (ONE log), a lent rpc stub through its rule's match
+//   • a wrong guess REJECTS raw (no NOT_A_METHOD re-grammar), through the dotted and the explicit form
+//   • then-safety (an awaited chain node settles into a live handle; a settled stub is not a thenable),
+//     stringify-safety (toJSON never dispatches), and the reserved transport words (then / dup /
+//     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
+// `kv.list` paging past 1000 keys is vitest/os-workers/kv-list-pagination.test.ts: deployed KV's list is
+// eventually consistent, so a row here would measure KV propagation, not the pagination.
+
+import { expect, test } from "vitest";
+import { errorCode } from "iterate/lib";
+import { freshCtx, openItx, readHead, rejection, until } from "../../helpers/client.ts";
+import { fetchProjectHost, ingressHostname, subdomainsOnly } from "../../helpers/project-host.ts";
+import { enableFixtureProcessor } from "../../helpers/sources.ts";
+import { SlackReplayTarget, Tools } from "../../helpers/targets.ts";
+
+// ── the built-in roots and the error grammar ──
+
+// SUBDOMAINS ONLY: the 421 is the wildcard's — under paths a label outside the grammar names no project
+// and the request is the platform's own (path-ingress.e2e.test.ts pins an unknown project there).
+subdomainsOnly(
+  "a project label outside the DNS grammar is not a project host: the edge names no DO for it — 421, never the control plane",
+  async () => {
+    // A project host is the one HTTP way into a project, and `projectHostOf` (src/app-config.ts) admits a
+    // DNS label only — `prj_evil` (an `_`, legal in a DO name) is no project host. Under the base there
+    // is nothing else, so the edge answers 421 (a fall-through to the control plane would be a working
+    // platform origin on a name the platform never chose) and no Durable Object is ever named or
+    // minted for it; the DO-name codec's own charset gate (`:` and the rest) is src/context/paths.test.ts.
+    const answer = await fetchProjectHost(`site--prj_evil.${ingressHostname()}`, "/w?repo=x");
+    expect(answer, answer.text).toMatchObject({ status: 421 });
+    expect(answer.text).toContain("not a project host");
+  },
+);
+
+test("cd('') resolves to THIS context (self) and answers rather than wedging", async () => {
+  // `resolveContextPath("/", "")` is "/" — the root's own path — and the DO's `context(p)` hands
+  // back ITSELF for its own path (iterate-context-durable-object.ts), so the empty spelling is an
+  // in-process call on this very context, landing in the SAME log. Pinned with a deadline so a
+  // regression to a self-RPC hop (or a twin DO) shows as a wedge or a split log, never as a 60 s
+  // test timeout.
+  const itx = openItx(freshCtx("self"));
+  const raced = await Promise.race([
+    itx.invoke("itx.cd('').append({type:'self-ping'})"),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error("self-context call wedged >10s (self-RPC deadlock)")),
+        10_000,
+      ),
+    ),
+  ]);
+  expect((raced as any[])[0]).toMatchObject({ type: "self-ping" });
+  const page = await itx.invoke(["itx", ["readEvents", 0, 50]]);
+  expect(page.events.map((e: any) => e.type)).toContain("self-ping");
+});
+
+// An enforcement refusal rides the same coded channel end to end as a default-deny miss.
+test.for([
+  {
+    name: "a default-deny miss",
+    code: "NO_ITX_EXPRESSION_MATCH",
+    message: /no rewrite rule matches/,
+    refused: (itx: any) => itx.invoke(["itx", "nope", ["thing"]]),
+  },
+  {
+    name: "a paused-stream refusal",
+    code: "STREAM_PAUSED",
+    message: /stream paused/,
+    refused: async (itx: any) => {
+      await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
+      return itx.append({ type: "mark", payload: { n: 1 } });
+    },
+  },
+])("$name carries code $code across the /api hop", async ({ code, message, refused }) => {
+  const err = await rejection(refused(openItx(freshCtx("coded"))));
+  expect(errorCode(err)).toBe(code);
+  expect(err.message).toMatch(message);
+});
+
+// ── the natural dotted client surface ──
+
+// The dotted call falls back to the ONE invoke method; the explicit form is the half it sugars.
+test.for([
+  { spelling: "explicit", whoami: (itx: any) => itx.invoke(["itx", ["whoami"]]) },
+  { spelling: "dotted", whoami: (itx: any) => itx.whoami() },
+])("the $spelling whoami answers", async ({ spelling, whoami }) => {
+  const ctx = freshCtx(spelling);
+  expect(await whoami(openItx(ctx))).toMatchObject({ projectId: ctx, path: "/" });
+});
+
+test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {
+  const itx = openItx(freshCtx("kv"));
+  expect(await itx.kv.put("k", "v")).toMatchObject({ ok: true });
+  expect(await itx.kv.get("k")).toBe("v");
+});
+
+test("dotted write, expression read: itx.append lands in the ONE log", async () => {
+  // `itx.append(...)` is the dotted hop onto the built-in `append` ROOT (IterateContext declares no
+  // such method); the read is the same root reached as an EXPRESSION. One log serves both spellings.
+  const itx = openItx(freshCtx("stream"));
+  const [committed] = await itx.append({ type: "mark", payload: { n: 1 } });
+  expect(committed.offset).toBeGreaterThanOrEqual(1);
+  const page: any = await itx.invoke(["itx", ["readEvents"]]);
+  expect(page.events.some((e: any) => e.type === "mark")).toBe(true);
+});
+
+test("dotted call through a rewrite rule's match: itx.b.hello() answers from a lent rpc stub", async () => {
+  // The rule is pure data whose TARGET names the physical registry (`itx.rpcStubs.get('itx.b')`);
+  // the resolver evaluates that target against the built-in and its RpcStubHandle pipelines the
+  // `.hello()` remainder into one DO-side dispatch.
+  const itx = await liveRig(freshCtx("conn"), "b");
+  expect(await itx.b.hello()).toBe("hello-from-b");
+});
+
+test("a dotted mid-path miss REJECTS (the invented namespace resolves to nothing callable)", async () => {
+  // A wrong guess at a live provider's surface propagates the RAW capnweb reject — it still ERRORS
+  // (that's the contract), just without a re-grammared "did not resolve to a function".
+  const { itx } = await slackRig(freshCtx("miss"));
+  await rejection(
+    itx.slack.api.postMessage({ channel: "#x", text: "y" }),
+    "dotted call through an invented namespace",
+  );
+});
+
+test("a leaf miss through the EXPLICIT form also rejects", async () => {
+  const { itx } = await slackRig(freshCtx("leaf"));
+  await rejection(
+    itx.invoke(["itx", "slack", "chat", ["nosuchMethod", { channel: "#x", text: "y" }]]),
+    "explicit-form call on a method the bridge never had",
+  );
+});
+
+test("an unawaited dotted chain is await-safe: awaiting mid-chain yields a live handle", async () => {
+  // The dotted fallback's path proxies keep `then` absent (RESERVED), so
+  // awaiting a dangling chain node settles to a usable handle instead of dispatching — and the chain
+  // stays callable afterwards (real client code holds chain nodes in variables and awaits them).
+  const itx = await liveRig(freshCtx("await"), "b9");
+  const node = itx.b9; // unawaited dotted chain node — no call yet
+  const handle: any = await node; // must settle (never treat `then` as a path segment)
+  expect(handle).toBeTruthy();
+  expect(await node.hello()).toBe("hello-from-b9"); // the chain stays callable after the await
+});
+
+test("awaiting the root itx stub again neither hangs nor dispatches (then-safety)", async () => {
+  // The ROOT half of then-safety: capnweb's settled stubs are not thenables — pinned so a future
+  // dotted fallback cannot regress it.
+  const ctx = freshCtx("then");
+  const itx = await openItx(ctx);
+  const again: any = await Promise.resolve(itx); // a settled stub must not look thenable
+  const who = await again.invoke(["itx", ["whoami"]]);
+  expect(who).toMatchObject({ projectId: ctx });
+});
+
+test("JSON.stringify of a dangling chain node must not dispatch, and the node stays live", async () => {
+  // toJSON/asymmetricMatch are protocol probes, not path segments: stringify of a logged handle
+  // returns a string, fires NO dispatch to the lent stub, and the node remains a live handle.
+  const itx = await liveRig(freshCtx("json"), "rec");
+  const node = itx.rec; // a dangling dispatcher (a logged handle, a report object)
+  const out = JSON.stringify({ node }); // probes toJSON — must NOT fire a call on the lent stub
+  expect(typeof out).toBe("string");
+  expect(await node.hello()).toBe("hello-from-rec"); // still a live handle afterwards
+});
+
+// PINS iterate/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
+// core/lib/src/expression.test.ts "hides reserved path segments from the path proxies
+// the hop hands out").
+// RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
+// the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure
+// a dispatcher. Observable stakes on the live itx: a probe that DID dispatch would commit through
+// the dispatch method (an event, a tally tick) or be refused by the rewrite rules — so the pin is
+// behavioral: probe everywhere, then prove the log and the tally never moved and every handle stayed live.
+test("reserved segments are hidden at EVERY depth: transport words never dispatch as itx expressions", async () => {
+  const ctx = freshCtx("resv");
+  const itx = await openItx(ctx);
+  await enableFixtureProcessor(itx, "tally");
+  await itx.append({ type: "resv-mark", payload: {} }); // direct write — one durable row
+  // Baseline: the durable head and tally's reduce of it (enable commits a subscription event too).
+  const head = await readHead(itx);
+  const baseline: any = await until("tally reduced the baseline log", async () => {
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    return s.offset >= head && s;
+  });
+
+  // (a) A dotted chain is AWAITABLE: `then` on the chain is capnweb's thenable hook, never a
+  // path segment — were it a segment, the await would dispatch ['itx','whoami','then',…] and
+  // reject at the rewrite rules instead of settling with the real answer.
+  const chain = itx.whoami(); // unawaited dotted call — an RpcPromise
+  expect(typeof (chain as any).then).toBe("function"); // the hook, served by the promise itself
+  expect(await chain).toMatchObject({ projectId: ctx, path: "/" });
+
+  // (b) capnweb transport words at the ROOT resolve to TRANSPORT machinery: `dup()` hands back
+  // a duplicate stub that still answers the real surface (a fallen-through probe would instead
+  // dispatch ['itx',['dup']] and reject 'no rewrite rule matches'), and `onRpcBroken` registers a
+  // callback without ever touching the wire as a path.
+  expect(typeof (itx as any).dup).toBe("function");
+  expect(typeof (itx as any).onRpcBroken).toBe("function");
+  const dupped: any = (itx as any).dup();
+  expect(await dupped.invoke(["itx", ["whoami"]])).toMatchObject({ projectId: ctx });
+  (itx as any).onRpcBroken(() => {}); // registers locally; must not travel as a path
+
+  // (c) The SAME at depth 2, on an InvokeHandle: on the UNAWAITED chain node all three words are
+  // the promise's own transport surface (functions, served locally — observed, not path
+  // segments); on the SETTLED handle the hop's `then`-hiding makes the stub a NON-thenable
+  // (`then` is undefined — a second await would settle, never dispatch) while dup/onRpcBroken
+  // stay transport; and the handle stays live through every probe.
+  const node = itx.facets.get("tally"); // unawaited dotted chain — no call yet
+  expect(typeof (node as any).then).toBe("function");
+  expect(typeof (node as any).dup).toBe("function");
+  expect(typeof (node as any).onRpcBroken).toBe("function");
+  const handle: any = await node; // settles (then-safety) — a stub of the InvokeHandle
+  expect(handle.then).toBeUndefined(); // the hop hides `then`: settled stubs are not thenables
+  expect(typeof handle.dup).toBe("function");
+  expect(typeof handle.onRpcBroken).toBe("function");
+  const snap: any = await handle.snapshot(); // the chain stays callable after every probe
+
+  // NOTHING dispatched: no probe committed an event (head unmoved) and tally never ticked.
+  expect(await readHead(itx)).toBe(head);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a count the baseline lacks is a probe that dispatched
+  expect(snap.state.counts).toEqual(baseline.state.counts);
+  expect(snap.state.counts["resv-mark"]).toBe(1);
+});
+
+/** Attach a slack bridge to `ctx` and hand back an ordinary second client: provider session +
+ *  consumer session over the same context. The bridge is a LIVE rpc stub lent under the key
+ *  `itx.slack` with the rewrite rule `itx.slack ⇒ itx.rpcStubs.get('itx.slack')` — so every other
+ *  client just speaks `itx.slack.chat.…`. */
+async function slackRig(ctx: string) {
+  const slack = new SlackReplayTarget();
+  await openItx(ctx).provide("itx.slack", slack);
+  const itx = openItx(ctx);
+  // Sanity through the EXPLICIT form — the rule rewrites before any dotted attempt.
+  await until("slack rule rewrites via the explicit form", async () => {
+    const posted: any = await itx.invoke([
+      "itx",
+      "slack",
+      "chat",
+      ["postMessage", { channel: "#sanity", text: "rig up" }],
+    ]);
+    return posted?.ok === true;
+  });
+  slack.calls.length = 0; // the sanity call is rig noise, not test data
+  return { itx, slack };
+}
+
+/** Lend a live Tools stub behind the rule `itx.<name>` and wait until it answers via the STRING form. */
+async function liveRig(ctx: string, name: string) {
+  const itx = openItx(ctx);
+  await openItx(ctx).provide(`itx.${name}`, new Tools(name));
+  await until(`lent stub 'itx.${name}' answers via the string form`, async () => {
+    return (await itx.invoke(`itx.${name}.hello()`)) === `hello-from-${name}`;
+  });
+  return itx;
+}

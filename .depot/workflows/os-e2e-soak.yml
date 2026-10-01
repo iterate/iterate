@@ -1,6 +1,6 @@
-# THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (the dispatched
+# THE FLAKE HUNT for core/os: run the e2e suite N times against one deployed worker (the dispatched
 # ref's deployment `<preview>-<sha7>`, `pnpm preview deploy --name <preview>`), each run followed by the
-# perf budgets (apps/os/perf, alone on the wire), and tally every row that did not pass every time
+# perf budgets (test/vitest/os/perf, alone on the wire), and tally every row that did not pass every time
 # (scripts/os/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input preview=soak-<your slug>
@@ -48,7 +48,7 @@ on:
         type: string
         default: "false"
       residency-timing:
-        description: '"1" also runs the opt-in residency timing rows (apps/os/perf/context-residency.perf.test.ts) after each e2e run'
+        description: '"1" also runs the opt-in residency timing rows (test/vitest/os/perf/context-residency.perf.test.ts) after each e2e run'
         required: false
         type: string
         default: "0"
@@ -82,7 +82,7 @@ jobs:
         run: doppler run --project os --config preview -- pnpm preview deploy --name "$PREVIEW" --apps none
       # The deployment's secrets are Doppler os/preview's (APP_CONFIG), so the admin bearer and the
       # sign-in password come from the same object the deploy uploads —
-      # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of envs.ts
+      # test/helpers/global-setup.ts reads them out of it, and the routing out of envs.ts
       # `previewDeployment`.
       - name: Soak
         env:
@@ -97,7 +97,7 @@ jobs:
           RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
           REDEPLOY: ${{ inputs.redeploy }}
           GAP: ${{ inputs.gap }}
-          # THE COMMIT the agents rows pin the published build of (apps/agents/e2e/support.ts
+          # THE COMMIT the agents rows pin the published build of (test/vitest/agents/support.ts
           # `publishedPackage`): its merge base with main, which GitHub answers with this token. The
           # checkout is shallow and has no origin/main to find it in.
           TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
@@ -112,5 +112,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: os-e2e-soak
-          path: apps/os/output/soak
+          path: test/output/soak
           if-no-files-found: warn

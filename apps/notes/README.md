@@ -18,7 +18,7 @@ Publish [config-worker.ts](config-worker.ts) as the project's config worker
 (`itx/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
 project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
 so `notes--<project>.iterate.app` reaches Notes (see
-[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)). The Worker's own URL
+[test/playwright/notes/sessions.spec.ts](../../test/playwright/notes/sessions.spec.ts)). The Worker's own URL
 (`notesEnvs` `baseUrl`) is only what the config worker fetches. Under paths ingress (every
 preview) it is `<platform>/projects/<project>/notes/`: the edge strips that base path and says it in
 `x-iterate-base-path`, and Notes puts it back on every path the browser addresses — links, assets,
@@ -43,7 +43,7 @@ like the deployed Worker: behind a tunnel, hot module reloading included. Under 
 preview) a
 tunnel's URL is `<platform>/projects/<project>/<name>/`, so the dev server starts under that base
 path, then the tunnel lends it to the project
-([packages/cli](../../packages/cli/README.md#tunnel)):
+([core/lib/src/cli](../../core/lib/src/cli/README.md#tunnel)):
 
 ```sh
 pnpm dev --port 5173 --base /projects/my-project/notes-dev/
@@ -55,10 +55,10 @@ path in for the build's ([packages/ui/src/apps/base-path.ts](../../packages/ui/s
 sign-in, as the deployed Notes does. Under subdomains the tunnel's host is an origin of its own, and
 plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
 Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself
-([pinned](../os/scripts/dev-tunnelled-hmr.test.ts) until upstream fixes it). A deployed or built OS
+([pinned](../../test/vitest/os/dev-tunnelled-hmr.test.ts) until upstream fixes it). A deployed or built OS
 does.
 
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform its projects run on
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and `itx.workspaces`. Deployment
 configuration lives in `notesEnvs` in the root `envs.ts`; the deployed browser proof is
-[specs/notes](../../specs/notes).
+[test/playwright/notes](../../test/playwright/notes).

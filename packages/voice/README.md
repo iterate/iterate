@@ -125,7 +125,7 @@ Run these commands from `apps/agents`. The project's config installs both apps.
 
 ```bash
 export WORKER_BASE_URL=https://os.iterate.com
-# a personal access token for prj-voice (apps/os/docs/credentials.md): the Dash's Sessions page, or
+# a personal access token for prj-voice (core/os/docs/credentials.md): the Dash's Sessions page, or
 # `pnpm exec iterate --config prd tokens create --name voice-scripts --project prj-voice`
 export ITERATE_BEARER_TOKEN=itk_…
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config prd --plain)

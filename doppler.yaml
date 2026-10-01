@@ -4,7 +4,7 @@ setup:
   - project: _shared
     path: packages/shared/
   - project: os
-    path: apps/os/
+    path: core/os/
   - project: kit
     path: apps/kit/
   - project: dash

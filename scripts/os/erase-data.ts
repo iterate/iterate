@@ -1,4 +1,4 @@
-/** Erase all apps/os data while retaining the worker, routes and resource identities.
+/** Erase all core/os data while retaining the worker, routes and resource identities.
  * Run `pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
  * The control plane's D1 tables (users, organizations, projects, grants), both KV namespaces, R2
@@ -13,8 +13,8 @@ import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "iterate/platform-
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
-import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
-import { osResourceNames, type OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
+import { readWranglerBase } from "../../core/os/scripts/generate-wrangler-config.ts";
+import { osResourceNames, type OsDeployableEnv } from "../../core/os/scripts/os-env.ts";
 import { isCloudflareError } from "./preview-artifacts.ts";
 
 const Listing = z.object({
@@ -210,7 +210,7 @@ async function eraseDataWith(
   await services.resetWorkerDurableObjects({
     ctx: context,
     workerName: env.workerName,
-    cwd: fileURLToPath(new URL("../../apps/os/", import.meta.url)),
+    cwd: fileURLToPath(new URL("../../core/os/", import.meta.url)),
     credentials: {
       CLOUDFLARE_API_TOKEN: context.secrets.CLOUDFLARE_API_TOKEN!,
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,

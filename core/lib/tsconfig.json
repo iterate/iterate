@@ -1,0 +1,13 @@
+{
+  // `iterate/*`, the SDK: Worker and browser code, typed against the Cloudflare types and never
+  // Node's, so it cannot lean on a Node global. The Node entries and the tests are
+  // tsconfig.node.json's, and the CLI tsconfig.cli.json's.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types/experimental"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src"],
+  "exclude": ["src/node.ts", "src/stream/test-support.ts", "src/**/*.test.*", "src/cli"]
+}

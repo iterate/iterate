@@ -52,7 +52,7 @@ a different tree than the deploy built: compare `target.deploymentId` with the d
 | Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                    |
 | Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
 | createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `scripts/os/preview.ts` per suite (from `testEvidencePaths`)         |
-| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
+| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `test/playwright.config.ts`, from `testEvidencePaths`                                                  |
 | The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/test-telemetry-finalizer.ts`            |
 | The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |
 | Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
@@ -203,8 +203,8 @@ The upload step's log and the job's summary give the run's prefix. With the same
 repository root:
 
 ```sh
-doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>manifest.json" --remote --pipe
-doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>playwright-html/index.html" --remote --file index.html
+doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 object get "iterate-ci/<prefix>manifest.json" --remote --pipe
+doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 object get "iterate-ci/<prefix>playwright-html/index.html" --remote --file index.html
 ```
 
 Every file the manifest lists is at `<prefix><path>`, its bytes hashing to the listed sha256. Each
@@ -271,13 +271,13 @@ Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN` and
 1. **The bucket and its retention.** Done on 2026-09-24:
 
    ```sh
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket create iterate-ci
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci backups-context-sweep-after-365-days backups/context-sweep/ --expire-days 365 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket create iterate-ci
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci backups-context-sweep-after-365-days backups/context-sweep/ --expire-days 365 --force
    # nothing expires state/
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle list iterate-ci
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle list iterate-ci
    ```
 
    No bucket lock is set ([#3110](https://github.com/iterate/iterate/issues/3110) has the commands).

@@ -1,0 +1,255 @@
+// lib.test.ts — the live-state delta format (the one invariant that matters: applyPatch(a, diff(a, b))
+// always deep-equals b — every shape below proves it, then asserts the op shapes we promised: append
+// fast path, wholesale array replace, key remove), the same-origin check as `{ origin, becomes }`
+// rows, and which deployment a hostname is (the environment favicon).
+import { expect, test, vi } from "vitest";
+import {
+  applyPatch,
+  cookieValueOf,
+  deploymentEnvironment,
+  diff,
+  environmentFaviconHref,
+  environmentFaviconSvg,
+  environmentTitle,
+  forwardIssues,
+  isSameOriginBrowserRequest,
+  type Issue,
+  releaseRpcSessions,
+  reportIssue,
+} from "./lib.ts";
+
+// ── diff + applyPatch ──
+test("deep-equal values diff to undefined (the don't-emit signal)", () => {
+  expect(diff({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBeUndefined();
+  expect(diff(3, 3)).toBeUndefined();
+});
+
+test("scalar and key changes are replace/add/remove ops", () => {
+  expect(roundtrip({ count: 1 }, { count: 2 })).toEqual([
+    { op: "replace", path: "/count", value: 2 },
+  ]);
+  expect(roundtrip({ a: 1 }, { a: 1, b: 2 })).toEqual([{ op: "add", path: "/b", value: 2 }]);
+  expect(roundtrip({ a: 1, b: 2 }, { a: 1 })).toEqual([{ op: "remove", path: "/b" }]);
+});
+
+test("the chat-log fast path: pure array append becomes `add …/-` ops", () => {
+  const ops = roundtrip({ messages: [{ t: "hi" }] }, { messages: [{ t: "hi" }, { t: "again" }] });
+  expect(ops).toEqual([{ op: "add", path: "/messages/-", value: { t: "again" } }]);
+});
+
+test("tail truncation becomes remove ops; middle divergence replaces wholesale", () => {
+  expect(roundtrip({ xs: [1, 2, 3] }, { xs: [1] })).toEqual([
+    { op: "remove", path: "/xs/2" },
+    { op: "remove", path: "/xs/1" },
+  ]);
+  expect(roundtrip({ xs: [1, 2, 3] }, { xs: [1, 9, 3] })).toEqual([
+    { op: "replace", path: "/xs", value: [1, 9, 3] },
+  ]);
+});
+
+test("nested recursion, type flips, and root replacement", () => {
+  roundtrip({ a: { b: { c: 1 } } }, { a: { b: { c: 2, d: 3 } } });
+  roundtrip({ a: [1] }, { a: { was: "array" } });
+  expect(roundtrip(1, { now: "object" })).toEqual([
+    { op: "replace", path: "", value: { now: "object" } },
+  ]);
+});
+
+test("JSON-Pointer escaping for keys containing / and ~", () => {
+  const ops = roundtrip({ "a/b": 1, "c~d": 2 }, { "a/b": 9, "c~d": 8 });
+  expect(ops.map((o) => o.path).sort()).toEqual(["/a~1b", "/c~0d"]);
+});
+
+test("applyPatch never mutates its input", () => {
+  const a = { messages: [{ t: "hi" }] };
+  applyPatch(a, [{ op: "add", path: "/messages/-", value: { t: "x" } }]);
+  expect(a.messages).toHaveLength(1);
+});
+
+test("keys shadowing Object.prototype members diff by OWN presence, not the chain", () => {
+  expect(roundtrip({ toString: "hi" }, {})).toEqual([{ op: "remove", path: "/toString" }]);
+  expect(roundtrip({}, { toString: "x" })).toEqual([{ op: "add", path: "/toString", value: "x" }]);
+  roundtrip({ constructor: "a", keep: 1 }, { keep: 1 });
+});
+
+test("diff sees JSON semantics: undefined keys vanish, Dates diff as their ISO strings", () => {
+  // a key "becoming undefined" is a REMOVAL on the wire, never a value-less op
+  expect(diff({ a: 1, b: 2 }, { a: 1, b: undefined })).toEqual([{ op: "remove", path: "/b" }]);
+  expect(diff({ a: undefined }, { a: undefined })).toBeUndefined();
+  // a changed Date emits a real patch (structural equal() alone would call them identical)
+  const ops = diff({ at: new Date(0) }, { at: new Date(1000) });
+  expect(ops).toEqual([{ op: "replace", path: "/at", value: new Date(1000).toISOString() }]);
+  // sparse-array holes normalize to null instead of producing holes in the ops array
+  const sparse = [1];
+  sparse[3] = 4;
+  expect(applyPatch([1], diff([1], sparse)!)).toEqual([1, null, null, 4]);
+});
+
+test("applyPatch cannot touch prototypes (patches arrive over the wire)", () => {
+  expect(() => applyPatch({}, [{ op: "add", path: "/__proto__/polluted", value: true }])).toThrow(
+    /__proto__/,
+  );
+  // traversal is own-property-only: an inherited member never resolves as a container
+  expect(() =>
+    applyPatch({}, [{ op: "add", path: "/constructor/prototype/polluted", value: true }]),
+  ).toThrow(/missing path/);
+  expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+});
+
+// ── origin ── the check `from-server-cookie` (session.ts) and the console's POST forms
+// (core/os issuer-pages.ts) ride on: `{ origin, becomes }` rows for a request to https://worker.example/api.
+
+const originRows: { headers: Record<string, string>; becomes: boolean }[] = [
+  { headers: {}, becomes: true }, // no Origin at all: a non-browser client
+  { headers: { origin: "" }, becomes: false }, // a PRESENT but empty Origin is foreign — never "no Origin" (lib.ts's one null-vs-empty exception)
+  { headers: { origin: "https://worker.example" }, becomes: true }, // the page is this origin
+  { headers: { origin: "https://evil.example" }, becomes: false }, // another site drove the browser
+  { headers: { origin: "https://site--prj.worker.example" }, becomes: false }, // same site is not same origin: a project host
+  { headers: { origin: "http://worker.example" }, becomes: false }, // the scheme is part of the origin
+  { headers: { origin: "https://worker.example:8443" }, becomes: false }, // so is the port
+  { headers: { origin: "null" }, becomes: false }, // an opaque origin (a sandboxed document) is foreign
+  { headers: { origin: "not a url" }, becomes: false },
+];
+for (const { headers: sent, becomes } of originRows)
+  test(`Origin ${JSON.stringify(sent)} ⇒ ${becomes}`, () => {
+    const headers = new Headers(sent);
+    expect(isSameOriginBrowserRequest({ url: "https://worker.example/api", headers })).toBe(
+      becomes,
+    );
+  });
+
+// ── cookies ── `cookieValueOf(header, name)`: `{ header, name, becomes }` rows.
+const cookieRows: { header: string | null; name: string; becomes: string | null }[] = [
+  { header: null, name: "a", becomes: null },
+  { header: "a=1", name: "a", becomes: "1" },
+  { header: "b=2; a=x=y", name: "a", becomes: "x=y" }, // a value may hold `=`
+  { header: "a=", name: "a", becomes: "" },
+  { header: "ab=1", name: "a", becomes: null }, // the whole name
+  { header: "a", name: "a", becomes: null }, // no `=`: not a cookie
+];
+for (const { header, name, becomes } of cookieRows)
+  test(`cookieValueOf(${JSON.stringify(header)}, ${JSON.stringify(name)}) ⇒ ${JSON.stringify(becomes)}`, () => {
+    expect(cookieValueOf(header, name)).toBe(becomes);
+  });
+
+test("reportIssue hands each issue to the forwarder — bounded attributes, the caught value itself — and a throwing forwarder never reaches the caller", () => {
+  const seen: Issue[] = [];
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const boom = new Error("boom");
+  forwardIssues((issue) => seen.push(issue));
+  reportIssue("site.a", boom, { projectId: "prj_1", skipped: undefined, long: "x".repeat(300) });
+  expect(seen).toEqual([
+    {
+      failureSite: "site.a",
+      caught: boom,
+      attributes: { projectId: "prj_1", long: "x".repeat(256) },
+    },
+  ]);
+  forwardIssues(() => {
+    throw new Error("forwarder down");
+  });
+  expect(() => reportIssue("site.b", boom)).not.toThrow();
+  forwardIssues(() => {});
+});
+
+test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
+  const released: string[] = [];
+  const session = (name: string, fail = false) => ({
+    [Symbol.dispose]() {
+      released.push(name);
+      if (fail) throw new Error(`${name} already gone`);
+    },
+  });
+  const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  expect(() =>
+    releaseRpcSessions([session("first"), session("middle", true), session("last")]),
+  ).not.toThrow();
+  expect(released).toEqual(["last", "middle", "first"]);
+  expect(reported).toHaveBeenCalled();
+});
+
+// ── environment ──
+test.each([
+  "os.iterate.com",
+  "dash.iterate.com",
+  "voice.iterate.com",
+  "k.iterate.com",
+  "agents.iterate.workers.dev",
+  "notes.iterate.workers.dev",
+  // the parents of the per-PR previews, and an experiment: not a PR
+  "os.iterate-dev-preview.workers.dev",
+  "exp-jonas-os.iterate-dev-preview.workers.dev",
+  // `pr` must lead the hostname, and the host must be workers.dev
+  "notpr12-os.iterate-dev-preview.workers.dev",
+  "pr12-x.iterate.com",
+])("%s is production", (hostname) => {
+  expect(deploymentEnvironment(hostname)).toEqual({ kind: "production" });
+});
+
+test.each([
+  ["pr2990-a1b2c3d-os.iterate-dev-preview.workers.dev", 2990, "pr2990-a1b2c3d"],
+  ["pr2990-a1b2c3d-dash.iterate-dev-preview.workers.dev", 2990, "pr2990-a1b2c3d"],
+  ["pr2990-os.iterate-dev-preview.workers.dev", 2990, "pr2990"],
+  ["pr2990-dash.iterate-dev-preview.workers.dev", 2990, "pr2990"],
+  ["pr7-kit.iterate-dev-preview.workers.dev", 7, "pr7"],
+])("%s is PR %i's preview, deployment %s", (hostname, pr, deployment) => {
+  expect(deploymentEnvironment(hostname)).toEqual({ kind: "preview", pr, deployment });
+});
+
+test.each(["localhost", "petshop.localhost", "127.0.0.1"])("%s is dev", (hostname) => {
+  expect(deploymentEnvironment(hostname)).toEqual({ kind: "dev" });
+});
+
+test("the title is prefixed off production only", () => {
+  expect(environmentTitle({ kind: "production" }, "Dash")).toBe("Dash");
+  expect(
+    environmentTitle({ kind: "preview", pr: 2990, deployment: "pr2990-a1b2c3d" }, "Dash"),
+  ).toBe("[pr2990] Dash");
+  expect(environmentTitle({ kind: "dev" }, "Sign in · Dash")).toBe("[dev] Sign in · Dash");
+});
+
+test("production keeps its own icon file", () => {
+  expect(environmentFaviconHref({ kind: "production" }, "/iterate-logo.svg")).toBe(
+    "/iterate-logo.svg",
+  );
+});
+
+test("a preview's icon is purple, with its PR number", () => {
+  const svg = decodeSvg(
+    environmentFaviconHref({ kind: "preview", pr: 2990, deployment: "pr2990-a1b2c3d" }, "/x.svg"),
+  );
+  expect(svg).toContain('fill="#7C3AED"');
+  expect(svg).toContain(">2990</text>");
+});
+
+test("dev's icon is teal, with the iterate mark", () => {
+  const svg = decodeSvg(environmentFaviconHref({ kind: "dev" }, "/x.svg"));
+  expect(svg).toContain('fill="#0F766E"');
+  expect(svg).toContain("<path");
+  expect(svg).not.toContain("<text");
+});
+
+test.each([
+  [7, 360],
+  [42, 360],
+  [123, 264],
+  [2990, 198],
+  [12345, 158],
+])("PR %i's digits fit across the square at font-size %i", (pr, fontSize) => {
+  expect(environmentFaviconSvg({ kind: "preview", pr, deployment: `pr${pr}-a1b2c3d` })).toContain(
+    `font-size="${fontSize}"`,
+  );
+});
+
+const roundtrip = (a: unknown, b: unknown) => {
+  const ops = diff(a, b);
+  expect(ops, `diff(${JSON.stringify(a)}, ${JSON.stringify(b)})`).toBeDefined();
+  expect(applyPatch(a, ops!)).toEqual(b);
+  return ops!;
+};
+
+function decodeSvg(href: string) {
+  const prefix = "data:image/svg+xml,";
+  expect(href.startsWith(prefix)).toBe(true);
+  return decodeURIComponent(href.slice(prefix.length));
+}

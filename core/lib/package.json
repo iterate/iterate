@@ -1,0 +1,205 @@
+{
+  "name": "iterate",
+  "version": "0.4.1",
+  "description": "SDK and CLI for Iterate",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "core/lib"
+  },
+  "homepage": "https://github.com/iterate/iterate#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "keywords": [
+    "iterate",
+    "sdk",
+    "capnweb",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    "./sdk": "./src/sdk/index.ts",
+    "./app": "./src/app.ts",
+    "./app-server": "./src/app-server.ts",
+    "./app-session": "./src/app-session.ts",
+    "./client": "./src/client/live-state.ts",
+    "./react": "./src/client/react.tsx",
+    "./api": "./src/api.ts",
+    "./lib": "./src/lib.ts",
+    "./metrics": "./src/metrics.ts",
+    "./expression": "./src/expression.ts",
+    "./principal": "./src/principal.ts",
+    "./stream/processor": "./src/stream/processor.ts",
+    "./stream/contract": "./src/stream/contract.ts",
+    "./stream/test-support": "./src/stream/test-support.ts",
+    "./oauth-scopes": "./src/oauth-scopes.ts",
+    "./project-ingress": "./src/project-ingress.ts",
+    "./app-config": "./src/app-config.ts",
+    "./compatibility-date": "./src/compatibility-date.ts",
+    "./pkg-pr-new": "./src/pkg-pr-new.ts",
+    "./platform-retry": "./src/platform-retry.ts",
+    "./config-repo-template": "./src/config-repo-template.ts",
+    "./integration-scopes": "./src/integration-scopes.ts",
+    "./oauth": "./src/client/oauth.ts",
+    "./stream/run": "./src/stream/run.ts",
+    "./email": "./src/email.ts",
+    "./node": "./src/node.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./sdk": {
+        "types": "./dist/sdk.d.mts",
+        "import": "./dist/sdk.mjs"
+      },
+      "./app": {
+        "types": "./dist/app.d.mts",
+        "import": "./dist/app.mjs"
+      },
+      "./app-server": {
+        "types": "./dist/app-server.d.mts",
+        "import": "./dist/app-server.mjs"
+      },
+      "./app-session": {
+        "types": "./dist/app-session.d.mts",
+        "import": "./dist/app-session.mjs"
+      },
+      "./client": {
+        "types": "./dist/client.d.mts",
+        "import": "./dist/client.mjs"
+      },
+      "./react": {
+        "types": "./dist/react.d.mts",
+        "import": "./dist/react.mjs"
+      },
+      "./api": {
+        "types": "./dist/api.d.mts",
+        "import": "./dist/api.mjs"
+      },
+      "./lib": {
+        "types": "./dist/lib.d.mts",
+        "import": "./dist/lib.mjs"
+      },
+      "./metrics": {
+        "types": "./dist/metrics.d.mts",
+        "import": "./dist/metrics.mjs"
+      },
+      "./expression": {
+        "types": "./dist/expression.d.mts",
+        "import": "./dist/expression.mjs"
+      },
+      "./principal": {
+        "types": "./dist/principal.d.mts",
+        "import": "./dist/principal.mjs"
+      },
+      "./stream/processor": {
+        "types": "./dist/stream/processor.d.mts",
+        "import": "./dist/stream/processor.mjs"
+      },
+      "./stream/contract": {
+        "types": "./dist/stream/contract.d.mts",
+        "import": "./dist/stream/contract.mjs"
+      },
+      "./stream/test-support": {
+        "types": "./dist/stream/test-support.d.mts",
+        "import": "./dist/stream/test-support.mjs"
+      },
+      "./oauth-scopes": {
+        "types": "./dist/oauth-scopes.d.mts",
+        "import": "./dist/oauth-scopes.mjs"
+      },
+      "./project-ingress": {
+        "types": "./dist/project-ingress.d.mts",
+        "import": "./dist/project-ingress.mjs"
+      },
+      "./app-config": {
+        "types": "./dist/app-config.d.mts",
+        "import": "./dist/app-config.mjs"
+      },
+      "./compatibility-date": {
+        "types": "./dist/compatibility-date.d.mts",
+        "import": "./dist/compatibility-date.mjs"
+      },
+      "./pkg-pr-new": {
+        "types": "./dist/pkg-pr-new.d.mts",
+        "import": "./dist/pkg-pr-new.mjs"
+      },
+      "./platform-retry": {
+        "types": "./dist/platform-retry.d.mts",
+        "import": "./dist/platform-retry.mjs"
+      },
+      "./config-repo-template": {
+        "types": "./dist/config-repo-template.d.mts",
+        "import": "./dist/config-repo-template.mjs"
+      },
+      "./integration-scopes": {
+        "types": "./dist/integration-scopes.d.mts",
+        "import": "./dist/integration-scopes.mjs"
+      },
+      "./oauth": {
+        "types": "./dist/oauth.d.mts",
+        "import": "./dist/oauth.mjs"
+      },
+      "./stream/run": {
+        "types": "./dist/stream/run.d.mts",
+        "import": "./dist/stream/run.mjs",
+        "default": "./dist/stream/run.mjs"
+      },
+      "./email": {
+        "types": "./dist/email.d.mts",
+        "import": "./dist/email.mjs",
+        "default": "./dist/email.mjs"
+      },
+      "./node": {
+        "types": "./dist/node.d.mts",
+        "import": "./dist/node.mjs"
+      }
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "menubar",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json && tsc -p tsconfig.cli.json",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "capnweb": "catalog:",
+    "json5": "catalog:",
+    "oauth4webapi": "catalog:",
+    "trpc-cli": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "react": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@types/ws": "catalog:"
+  },
+  "bin": {
+    "iterate": "./bin/iterate.js"
+  }
+}

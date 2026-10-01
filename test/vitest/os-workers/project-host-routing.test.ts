@@ -1,0 +1,390 @@
+import { evictDurableObject } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import { newWebSocketRpcSession } from "capnweb";
+import { expect, test } from "vitest";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
+import {
+  catalog,
+  fakeCloudflareCustomHostnames,
+  ORIGIN,
+  readLog,
+  releasePins,
+  SRC_ECHO_APP,
+  stub,
+} from "./support.ts";
+const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEARER! } as const;
+
+const echoConfigWorker = ["itx", "workers", ["get", { source: SRC_ECHO_APP }]];
+
+test("the edge picks the project only: `<routingSlug>--<project>` and the apex both reach the config worker's fetch, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; an unknown routing slug reaches it too; two labels under the base are no project host (421); no config worker is 404", async () => {
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "routing-shapes" });
+  // the host label is the project's slug; the context it reaches is the project's minted id
+  const { projectId } = await itx.whoami();
+  expect(projectId).toMatch(/^prj_[0-9a-f]{32}$/);
+  // no config worker (ingress switched off): every host of the project is the "no site yet" 404
+  await publishConfigWorker(itx, null);
+  const forged = { headers: { "x-iterate-routing-slug": "other" } }; // a visitor picking a slug
+  for (const host of ["routing-shapes", "echo--routing-shapes"]) {
+    const none = await call(`https://${host}.projects.test/`, forged);
+    expect(none, host).toMatchObject({ status: 404 });
+    expect(await none.text()).toMatch(/no site yet/);
+  }
+  await publishConfigWorker(itx, echoConfigWorker);
+  // a routing slug and an unknown one: the config worker, the header the edge's — the visitor's overwritten
+  for (const [host, routingSlug] of [
+    ["echo--routing-shapes", "echo"],
+    ["unknown--routing-shapes", "unknown"],
+  ]) {
+    const seen = await call(`https://${host}.projects.test/`, forged);
+    expect(seen, await seen.clone().text()).toMatchObject({ status: 200 });
+    expect(await seen.json()).toEqual({
+      principal: null,
+      authorization: null,
+      cookie: null,
+      routingSlug,
+    });
+  }
+  // the apex: the same config worker, and a visitor's routing slug is deleted
+  const apex = await call("https://routing-shapes.projects.test/", forged);
+  expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
+  expect(await apex.json()).toMatchObject({ routingSlug: null });
+  // two labels under the base, even naming a live project: no project host, never its config worker
+  const dotted = await call("https://echo.routing-shapes.projects.test/", forged);
+  expect(dotted).toMatchObject({ status: 421 });
+  expect(await dotted.text()).toMatch(/is not a project host/);
+});
+
+/** A loaded worker that fetches its own project through `env.ITX.fetch` — a provided row that
+ *  names the config worker — forging the routing slug: what the config worker then sees is the
+ *  platform's answer. */
+const SRC_FORGER = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Forger extends WorkerEntrypoint {
+  async run() {
+    const res = await this.env.ITX.fetch(new Request("https://forger.internal/", {
+      headers: { "x-itx-expression": "itx.echo", "x-iterate-routing-slug": "forged-by-loaded-code" },
+    }));
+    return [{ status: res.status, body: await res.json() }];
+  }
+}`,
+};
+
+test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.ITX.fetch reaches the config worker with no routing slug", async () => {
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "routing-forge" });
+  await publishConfigWorker(itx, echoConfigWorker);
+  await itx.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.echo", target: echoConfigWorker },
+  });
+  const seen = (await itx.invoke(["itx", "workers", ["get", { source: SRC_FORGER }], ["run"]])) as {
+    status: number;
+    body: { routingSlug: string | null };
+  }[];
+  expect(seen).toMatchObject([{ status: 200, body: { routingSlug: null } }]);
+});
+
+/** An app whose body is three chunks, 100 ms apart: still streaming after its Response is handed on. */
+const SRC_SLOW_APP = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Slow extends WorkerEntrypoint {
+  fetch() {
+    const encoder = new TextEncoder();
+    let n = 0;
+    return new Response(new ReadableStream({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        controller.enqueue(encoder.encode("chunk-" + n + ";"));
+        if (++n === 3) controller.close();
+      },
+    }));
+  }
+}`,
+};
+
+/** The config worker's router, as the SDK teaches it: one `using` scope per request, released once
+ *  the app's Response is in, while its body still streams. */
+const SRC_GET_ITX_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
+  async fetch(request) {
+    using itx = this.getItx();
+    return await itx.slow.fetch(request);
+  }
+}`,
+};
+
+test("a router that answers through `using itx = this.getItx()` hands on the app's whole streamed body — the release after the Response does not cut it — and leaves nothing holding the context", async () => {
+  const ctx = "prj_routing_getitx_stream";
+  const s = stub(ctx);
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.slow",
+      target: ["itx", "workers", ["get", { source: SRC_SLOW_APP }]],
+    },
+  });
+  // What the edge sends a context for a project host's request (worker.ts): a plain fetch naming
+  // the router by itx expression.
+  const page = await s.fetch(
+    new Request("https://router.test/", {
+      headers: {
+        "x-itx-expression": JSON.stringify([
+          "itx",
+          "workers",
+          ["get", { source: SRC_GET_ITX_ROUTER }],
+        ]),
+      },
+    }),
+  );
+  expect(await page.text()).toBe("chunk-0;chunk-1;chunk-2;");
+  await releasePins(ctx);
+  await evictDurableObject(s); // times out after 30 s while anything still holds it
+});
+
+test("under the base, only a project host: a hostname that fails the grammar is 421 — never the control plane; the platform host itself is unaffected", async () => {
+  // `site--prj_1` (an `_`), `a.b.c` (more than one label under the base), `--x` (no routing slug): none
+  // is a project host, and none may be a working platform ORIGIN on a name the platform never chose
+  for (const host of ["site--prj_1", "a.b.c", "--x"]) {
+    const res = await call(`https://${host}.projects.test/login`, {
+      method: "POST",
+      body: new URLSearchParams({ email: "stranger@example.com", next: "/" }),
+    });
+    expect(res, host).toMatchObject({ status: 421 });
+    expect(res.headers.get("set-cookie"), host).toBeNull();
+  }
+  expect(await call(`${ORIGIN}/version`)).toMatchObject({ status: 200 });
+});
+
+test("a project's own hostname: added, the processor creates its wildcard Cloudflare custom hostname (faked) and claims it once its ownership record names the project; the edge serves the project's config worker there, `<routingSlug>.<hostname>` with that routing slug; no other project can take it or a name under it, or delete its custom hostname; removed, the custom hostname is deleted and the claim released", async () => {
+  const cloudflare = fakeCloudflareCustomHostnames();
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "own-hostname" });
+  await publishConfigWorker(itx, [
+    "itx",
+    "workers",
+    ["get", { source: SRC_HOSTNAME_SITE, cacheKey: "own-hostname" }],
+  ]);
+  const add = async (project: typeof itx, hostname: string) => {
+    const [asked] = await project.append({
+      type: "events.iterate.com/project/hostname-add-requested",
+      payload: { hostname },
+    });
+    return project.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-settled",
+      afterOffset: asked!.offset,
+      timeoutMs: 10_000,
+    });
+  };
+  const { projectId } = await itx.whoami();
+  // before the owner's TXT record names the project: provisioned, the records to add, no claim
+  expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
+    payload: {
+      hostname: "iterate.somedomain.test",
+      error: null,
+      claimed: false,
+      cloudflare: {
+        status: "pending",
+        records: [
+          { type: "CNAME", name: "iterate.somedomain.test", value: "cname.saas.test" },
+          { type: "CNAME", name: "*.iterate.somedomain.test", value: "cname.saas.test" },
+          {
+            type: "CNAME",
+            name: "_acme-challenge.iterate.somedomain.test",
+            value: "iterate.somedomain.test.dcv-uuid.dcv.cloudflare.com",
+          },
+          {
+            type: "TXT",
+            name: "_iterate.iterate.somedomain.test",
+            value: `iterate-project=${projectId}`,
+          },
+        ],
+      },
+    },
+  });
+  expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  expect(await catalog().projectByHostname(["iterate.somedomain.test"])).toBeNull();
+  // the owner adds it: the check claims it
+  cloudflare.owners["iterate.somedomain.test"] = projectId;
+  expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
+    payload: { error: null, claimed: true },
+  });
+  // the apex: the project's config worker, no routing slug
+  const apex = await call("https://iterate.somedomain.test/");
+  expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
+  expect(await apex.json()).toEqual({ host: "iterate.somedomain.test", routingSlug: null });
+  // one label under it: that routing slug, as `echo--own-hostname.projects.test` names it
+  const echo = await call("https://echo.iterate.somedomain.test/");
+  expect(echo, await echo.clone().text()).toMatchObject({ status: 200 });
+  expect(await echo.json()).toEqual({ host: "echo.iterate.somedomain.test", routingSlug: "echo" });
+  // another project cannot take it or a name under it, even with a record naming it; the
+  // deployment's own zones are refused; and a remove there leaves the holder's custom hostname
+  const other = await admin.projects.create({ project: "own-hostname-other" });
+  expect(await add(other, "iterate.somedomain.test")).toMatchObject({
+    payload: { error: null, claimed: false },
+  });
+  cloudflare.owners["echo.iterate.somedomain.test"] = (await other.whoami()).projectId;
+  for (const hostname of ["echo.iterate.somedomain.test", "x.projects.test"])
+    expect(await add(other, hostname)).toMatchObject({
+      payload: { hostname, cloudflare: null, error: expect.any(String), claimed: false },
+    });
+  const [elsewhere] = await other.append({
+    type: "events.iterate.com/project/hostname-remove-requested",
+    payload: { hostname: "iterate.somedomain.test" },
+  });
+  await other.waitForEvent({
+    type: "events.iterate.com/project/hostname-removed",
+    afterOffset: elsewhere!.offset,
+    timeoutMs: 10_000,
+  });
+  expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  expect((await catalog().projectByHostname(["iterate.somedomain.test"]))?.project.id).toBe(
+    projectId,
+  );
+  const [removal] = await itx.append({
+    type: "events.iterate.com/project/hostname-remove-requested",
+    payload: { hostname: "iterate.somedomain.test" },
+  });
+  await itx.waitForEvent({
+    type: "events.iterate.com/project/hostname-removed",
+    afterOffset: removal!.offset,
+    timeoutMs: 10_000,
+  });
+  expect(cloudflare).toMatchObject({ hostnames: [] });
+  expect(await catalog().projectByHostname(["iterate.somedomain.test"])).toBeNull();
+});
+
+test("a project's primary hostname: once a live hostname is made primary, itx.url composes on it; a navigation on the ingress base is a 308 to the same routing slug, path and query there; a POST, a fetch and a WebSocket upgrade on the ingress base are served", async () => {
+  const cloudflare = fakeCloudflareCustomHostnames({ active: ["primary.somedomain.test"] });
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "primary-hostname" });
+  cloudflare.owners["primary.somedomain.test"] = (await itx.whoami()).projectId;
+  await publishConfigWorker(itx, [
+    "itx",
+    "workers",
+    ["get", { source: SRC_HOSTNAME_SITE, cacheKey: "primary-hostname" }],
+  ]);
+  const [asked] = await itx.append({
+    type: "events.iterate.com/project/hostname-add-requested",
+    payload: { hostname: "primary.somedomain.test" },
+  });
+  expect(
+    await itx.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-settled",
+      afterOffset: asked!.offset,
+      timeoutMs: 10_000,
+    }),
+  ).toMatchObject({ payload: { cloudflare: { status: "active", sslStatus: "active" } } });
+  const [configured] = await itx.append({
+    type: "events.iterate.com/project/primary-hostname-configured",
+    payload: { hostname: "primary.somedomain.test" },
+  });
+  // the processor's cursor passes the event once the control plane holds the primary
+  await itx.invoke([
+    "itx",
+    "facets",
+    ["get", "project"],
+    ["waitUntilProcessed", { offset: configured!.offset }],
+  ]);
+
+  expect(await itx.url({ routingSlug: "echo", path: "/a?b=1" })).toBe(
+    "https://echo.primary.somedomain.test/a?b=1",
+  );
+  expect(await itx.url()).toBe("https://primary.somedomain.test/");
+  expect(await itx.whoami()).toMatchObject({ projectUrl: "https://primary.somedomain.test/" });
+
+  const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+  for (const [from, to] of [
+    [
+      "https://echo--primary-hostname.projects.test/a?b=1",
+      "https://echo.primary.somedomain.test/a?b=1",
+    ],
+    ["https://primary-hostname.projects.test/", "https://primary.somedomain.test/"],
+  ]) {
+    const redirected = await call(from!, { headers: navigate });
+    expect(redirected, from).toMatchObject({ status: 308 });
+    expect(redirected.headers.get("location"), from).toBe(to);
+  }
+  const served = "https://echo--primary-hostname.projects.test/a?b=1";
+  for (const [why, init] of [
+    ["a POST", { method: "POST", headers: navigate, body: "x" }],
+    ["a fetch", { headers: { "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" } }],
+    ["a WebSocket upgrade", { headers: { ...navigate, upgrade: "websocket" } }],
+  ] as const) {
+    const answer = await call(served, init);
+    expect(answer, why).toMatchObject({ status: 200 });
+    expect(await answer.json(), why).toEqual({
+      host: "echo--primary-hostname.projects.test",
+      routingSlug: "echo",
+    });
+  }
+  // on the primary hostname itself, a navigation is served
+  const onPrimary = await call("https://echo.primary.somedomain.test/", { headers: navigate });
+  expect(onPrimary).toMatchObject({ status: 200 });
+});
+
+test("a visit begins a chain that names its host and Cloudflare's ray, so what it causes joins Cloudflare's request log", async () => {
+  using session = await api();
+  const itx = await session.authenticate(ADMIN).projects.create({ project: "ray-chain" });
+  const { projectId } = await itx.whoami();
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_VISIT_SITE }]]);
+  const headers = { "cf-ray": "8f1c2d3e4f5a6b7c-LHR" };
+  const visit = await call("https://ray-chain.projects.test/", { headers });
+  expect(visit, await visit.clone().text()).toMatchObject({ status: 200 });
+  const [visited] = (await readLog(projectId)).filter(({ type }) => type === "test/visited");
+  expect(visited?.source.cause).toMatchObject({
+    chain: expect.stringMatching(
+      / with a request to ray-chain\.projects\.test \(ray 8f1c2d3e4f5a6b7c-LHR\) ~/,
+    ),
+    depth: 0,
+  });
+});
+
+/** A config worker that records each visit on its project's log. */
+const SRC_VISIT_SITE = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
+  async fetch() {
+    using itx = this.getItx();
+    await itx.append({ type: "test/visited" });
+    return new Response("visited");
+  }
+}`,
+};
+
+/** A config worker that says which host it answered, and the routing slug it saw. */
+const SRC_HOSTNAME_SITE = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
+  fetch(request) {
+    return Response.json({
+      host: new URL(request.url).hostname,
+      routingSlug: request.headers.get("x-iterate-routing-slug"),
+    });
+  }
+}`,
+};
+
+function call(url: string, init?: RequestInit) {
+  return exports.default.fetch(new Request(url, { redirect: "manual", ...init }));
+}
+
+/** A capnweb session over the worker's /api; the test that opens it disposes it (`using`). */
+async function api() {
+  const response = await call(`${ORIGIN}/api`, {
+    headers: { Upgrade: "websocket" },
+  });
+  response.webSocket!.accept();
+  return newWebSocketRpcSession<IterateRpcTarget>(response.webSocket! as unknown as WebSocket);
+}

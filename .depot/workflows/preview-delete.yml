@@ -38,7 +38,7 @@ on:
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
-      - apps/os/**
+      - core/os/**
       - configs/**
       - apps/dash/**
       - apps/agents/**
@@ -48,10 +48,8 @@ on:
       - apps/voice/**
       - apps/kit/**
       - "!apps/kit/firmware/**"
-      - specs/**
-      - playwright.config.ts
-      - packages/cli/**
-      - packages/iterate/**
+      - test/**
+      - core/lib/**
       - packages/agents/**
       - packages/voice/**
       - packages/docs/**

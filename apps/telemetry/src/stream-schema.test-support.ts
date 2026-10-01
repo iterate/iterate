@@ -1,6 +1,6 @@
 // stream-schema.test-support.ts — TEST CODE: whether a row fits its Pipelines stream's schema, as
 // apps/telemetry/schemas/*.json holds each. A stream drops a row that does not fit, so the tests of
-// every row builder (otlp.ts here, apps/os platform-hook.ts) check their rows with this.
+// every row builder (otlp.ts here, core/os platform-hook.ts) check their rows with this.
 
 /** Why `row` does not fit `schema`, one line per column; none when it fits. An absent optional
  *  column is undefined or null. */

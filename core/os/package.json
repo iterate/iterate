@@ -1,0 +1,63 @@
+{
+  "name": "os",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "description": "OS: the Iterate platform Worker and its TanStack Start issuer pages",
+  "scripts": {
+    "dev": "node scripts/dev.ts",
+    "getin": "node scripts/getin.ts",
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
+    "test": "vitest run --configLoader runner --silent=passed-only",
+    "test:watch": "vitest --configLoader runner",
+    "db:generate": "sqlfu generate",
+    "db:check": "rm -f .sqlfu/app.db && sqlfu migrate --yes && sqlfu check",
+    "db:draft": "sqlfu draft",
+    "db:migrate": "wrangler d1 migrations apply DB --local --persist-to .wrangler/state -c wrangler.base.jsonc"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@cloudflare/workers-oauth-provider": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
+    "@octokit/auth-app": "8.3.1",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "capnweb": "catalog:",
+    "class-variance-authority": "catalog:",
+    "cn": "catalog:",
+    "es-module-lexer": "^2.1.0",
+    "iterate": "workspace:*",
+    "json5": "catalog:",
+    "lucide-react": "catalog:",
+    "oauth4webapi": "catalog:",
+    "pako": "catalog:",
+    "postal-mime": "4.0.0",
+    "posthog-js": "catalog:",
+    "posthog-node": "^5.53.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "sqlfu": "catalog:",
+    "sucrase": "^3.35.1",
+    "tailwindcss": "catalog:",
+    "tw-animate-css": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "esbuild": "catalog:",
+    "shadcn": "catalog:",
+    "trpc-cli": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

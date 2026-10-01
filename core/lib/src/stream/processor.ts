@@ -1,0 +1,1074 @@
+// stream/processor.ts — THE PROCESSOR: `StreamProcessor`, the PURE class an author writes (a
+// contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
+// it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
+// storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. This module is the
+// processor author's one import path, `iterate/stream/processor`: loaded isolates link it to the
+// platform's own build and Node runs it as it is (the agents package, unit tests), so nothing here
+// imports cloudflare:workers. Four concepts ride with it:
+//   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
+//   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
+//   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
+//   processor contract — `defineProcessorContract`, the zod contract helper, from contract.ts, which a
+//                        browser can load without this engine
+//
+// THE CONCURRENCY CONTRACT:
+//   1. ONE SERIAL CHAIN per processor — batches never interleave.
+//   2. ONE EVENT AT A TIME inside a batch: this event's `blockProcessorWhile` work completes
+//      before the next event's `processEvent` starts (a FIFO chain, awaited per event).
+//   3. `runInBackground` work is deliberately NOT awaited — it may overtake later events; it is
+//      a droppable attempt whose outcome must be recoverable from state at the next at-head pass —
+//      and that pass is OWED: while any attempt is in flight the engine holds a CLAIM on its
+//      context's alarm ("come back by T"), released when the last attempt settles; a host that dies
+//      mid-attempt is revived by the alarm (`revive()`: catch up, run the at-head pass), and an
+//      attempt still in flight at a revive claims again, later each time, so a hung attempt costs a
+//      few wakes an hour and never a loop.
+//   4. ONE DURABLE COMMIT PER BATCH, after every event's blocking work settled — persist BEFORE
+//      advancing past the last DURABLE offset. A failed batch persists nothing, retried whole.
+//   5. The at-head pass: the last consumable event of a batch that reaches the stream head
+//      carries `delivery.caughtUp: true`; a batch that reaches the head without one gets a single
+//      extra `processEvent({ event: null, delivery: { caughtUp: true } })` call.
+//
+// DELIVERY IS PUSH-FIRST with a SCANNED-RANGE PROOF: the cursor advances on the RANGE a push
+// carries, never by counting events, so ephemeral holes, consumes-filters and reboot gaps are all
+// the same non-event. A non-contiguous push triggers GAP REPAIR: read durable rows from the own
+// cursor up to the push start, then process the push. Ephemeral events ride pushes ONLY (an
+// ephemeral missed while a facet rebuilds is gone by design) and NEVER trigger a checkpoint write,
+// so a pure-ephemeral flood costs this class ZERO storage writes.
+//
+// THE READ VERBS (`snapshot`, `liveSnapshot`) read the log only while the reduce has not provably
+// reached the head SHOWN so far: the highest a push showed or — for a processor FED BY PUSHES (its
+// host's word: a row of its context pushes it every commit it consumes) — a catch-up read from the
+// log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
+// nothing pushes learns of a new event only by reading, and reads every time. A head shown is only
+// as fresh as the pushes that have ARRIVED, so the host holds a read back until the pushes it
+// already owes the processor have landed (core/os SubscriptionDelivery `deliveriesQueuedFor`): a
+// read that follows a commit holds it.
+//
+// `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
+// (`ReduceCheckpointTable` below) with the offset and contract version it was reduced under; bumping
+// `contract.version` re-reduces from offset 0 through `reduce` only, never re-running side effects —
+// over durable rows only, which is why durable product truth must never derive from an ephemeral.
+
+import type { SqlStorageValue } from "@cloudflare/workers-types";
+import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
+import { runCausedBy } from "../cause.ts";
+import type { Principal } from "../principal.ts";
+import type { EmittedEventInput, ProcessorContract } from "./contract.ts";
+
+export * from "./contract.ts";
+
+/** The stream a processor reduces. `read` answers durable rows plus the proof: `scannedThroughOffset`
+ *  is how far the read is CONTIGUOUSLY known (never past the durable mark — stream.ts), and `atHead`
+ *  says whether the page was cut; its length says nothing (a budget cut is short of `limit`). */
+export type ProcessorStream = {
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]> | StreamEvent[];
+  read(
+    afterOffset?: number,
+    limit?: number,
+  ): Promise<{ events: StreamEvent[]; scannedThroughOffset: number; atHead: boolean }>;
+  /** This processor's claim on its context's alarm: "come back by `at`" (the context's alarm pass
+   *  then calls `revive()`), or `null` to release it. Durable on the context, never a log event. */
+  claim(at: number | null): Promise<unknown>;
+};
+
+/** How long after an attempt starts a dead host is revived: the recovery bound. A revive that finds
+ *  the attempt still in flight claims again with the delay doubled, up to `REVIVE_AFTER_MAX_MS`. */
+export const REVIVE_AFTER_MS = 20_000;
+export const REVIVE_AFTER_MAX_MS = 30 * 60_000;
+/** How many times work in flight may die with its host before a revive no longer starts it again. */
+const MAX_DEATHS = 5;
+/** The started marker's key and value (rule 3): work is in flight, how often it died so far, and
+ *  on what code. */
+const STARTED = "processor-work-started";
+type Started = { deaths: number; codeId?: string };
+/** What the engine keeps of its own beside the checkpoint: a Durable Object's `ctx.storage.kv`
+ *  (spelled here: the CLI compiles the engine without Cloudflare's types). */
+export type EngineKv = {
+  get<T>(key: string): T | undefined;
+  put(key: string, value: unknown): void;
+  delete(key: string): unknown;
+};
+
+/** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
+ *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
+export type ScannedRange = { after: number; through: number };
+
+export type ReduceArgs<State, Event = StreamEvent> = { event: Event; state: State };
+
+export type ProcessEventArgs<
+  State,
+  Event = StreamEvent,
+  /** What `append` takes: `EmittedEventInput<typeof Contract>` for a processor that declares one —
+   *  each type the contract `emits`, its payload as the catalog spells it. */
+  Emitted extends StreamEventInput = StreamEventInput,
+> = {
+  /** The consumed event — or `null` for the eventless at-head pass. */
+  event: Event | null;
+  state: State;
+  previousState: State;
+  /** Emit (validated against `emits`, provenance-stamped) onto this processor's own stream. Declared
+   *  as METHODS (not arrow-typed properties) on purpose: a subclass that narrows `Emitted` must stay
+   *  assignable to `StreamProcessor<State>` (the host's field), and only method parameters are
+   *  compared bivariantly. */
+  append(...events: Emitted[]): Promise<StreamEvent[]>;
+  /** Hold the cursor until `work` settles; FIFO with other blockers of the SAME event. */
+  blockProcessorWhile: (work: () => Promise<unknown>) => void;
+  /** Fire-and-forget attempt; may overtake later events; outcome must be state-recoverable. */
+  runInBackground: (work: () => Promise<unknown>) => void;
+  delivery: { caughtUp: boolean };
+};
+
+/** THE ONE consumes rule — the processor engine, the subscription delivery loop, and the inline
+ *  reduces all call this; there is no second copy to drift. `consumes` undefined = every durable event
+ *  (a subscriber's default). "*" = every durable event. A NAMED type opts that type in, INCLUDING
+ *  ephemerals ("*" NEVER sweeps ephemerals) — so a live-state watcher spells
+ *  `consumes: ["events.iterate.com/itx/live-state-changed"]` and filters `payload.key` itself. The wake
+ *  record (`itx/woken`) is a durable event like any other: a "*" row receives every incarnation's. */
+export function consumesEvent(
+  consumes: readonly string[] | undefined,
+  event: { type: string; ephemeral?: boolean },
+): boolean {
+  if (event.ephemeral) return consumes?.includes(event.type) ?? false;
+  return !consumes || consumes.includes("*") || consumes.includes(event.type);
+}
+
+/** A failure that is a LOOP_LIMIT refusal the platform recorded (core/os src/cause.ts
+ *  `recordRefusal`) settles as done: the loop ends there, with its one fact, and nothing is retried
+ *  or reported. Any other — an unrecorded one too — is rethrown. */
+const unlessLoopLimit = (error: unknown): void => {
+  const recorded = (error as { data?: { recorded?: boolean } } | undefined)?.data?.recorded;
+  if (errorCode(error) !== "LOOP_LIMIT" || !recorded) throw error;
+};
+
+/** What the ENGINE reduces: the contract's consumes, minus the one type no processor may ever reduce or
+ *  react to — a live-state delta. Deltas are notifications ABOUT state; letting one feed a reduce is
+ *  the feedback-loop class, made unspellable here rather than discouraged. */
+const reducesEvent = (consumes: readonly string[], event: { type: string; ephemeral?: boolean }) =>
+  event.type !== "events.iterate.com/itx/live-state-changed" && consumesEvent(consumes, event);
+
+/** THE AUTHOR CLASS: a contract, three hooks and one helper. Deps an effect needs arrive through
+ *  the subclass's own constructor, as for any class. One instance lives as long as its host; a field
+ *  on it is RUNTIME state (gone with the host), which `projectLiveState` may reduce into the live view. */
+export abstract class StreamProcessor<State, Event extends StreamEvent = StreamEvent> {
+  abstract readonly contract: ProcessorContract<State>;
+
+  /** Pure reduce. Return the NEXT state (a new object) — or null/undefined to keep the current. The
+   *  `Event` type param — a discriminated union of the events the contract consumes — narrows
+   *  `event.payload` per `event.type` inside the body, so no cast is needed; it defaults to the
+   *  untyped `StreamEvent` for processors that don't declare one. */
+  reduce(_args: ReduceArgs<State, Event>): State | null | undefined {
+    return undefined;
+  }
+
+  /** Side-effect hook. Synchronous by design: register async work via the two helpers on args.
+   *  `append` takes what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
+   *  a subclass whose `contract` is a defined one gets each emitted type's payload as its catalog
+   *  spells it; the base `ProcessorContract` takes any input). */
+  processEvent(
+    _args: ProcessEventArgs<State, Event, EmittedEventInput<this["contract"]>>,
+  ): undefined {}
+
+  /** The live-state PROJECTION — the shape clients see and the diffs are computed over. DEFAULT: the
+   *  reduced state verbatim, so every processor is live out of the box; that is deliberate — the
+   *  delta is an EPHEMERAL event, so "always live" costs an offset and a cheap diff, nothing durable.
+   *  Override to redact, or to REDUCE IN RUNTIME FIELDS (`return { ...state, lastSeenMs: this.lastSeenMs }`);
+   *  the engine re-projects after EVERY batch, and a field changed outside a batch needs the host's
+   *  `publishLiveState()`. */
+  projectLiveState(state: State): unknown {
+    return state;
+  }
+
+  /** Stable idempotency key namespaced by slug; pass the event being processed for a per-event key. */
+  idempotencyKey(key: string, event?: StreamEvent): string {
+    return event ? `${this.contract.slug}/${key}@${event.offset}` : `${this.contract.slug}/${key}`;
+  }
+}
+
+/** THE ENGINE: everything below the author's three hooks — the serial chain, the checkpoint, gap
+ *  repair, the at-head pass, version re-reduces, live-state publishing. Constructed by the host
+ *  (`StreamProcessorDurableObject`; a test with the stand-ins in test-support.ts). */
+export class ProcessorEngine<State> {
+  readonly processor: StreamProcessor<State>;
+  readonly #contract: ProcessorContract<State>;
+  readonly #stream: ProcessorStream;
+  readonly #storage: ReduceCheckpointTable;
+
+  /** Rule 1: every batch runs on this chain, one after another. */
+  #serialBatchChain = Promise.resolve();
+  /** The reduced state and the durable offset it was reduced through — checkpointed on the batches
+   *  that carried a durable. */
+  #reducedState: State;
+  #reducedThroughOffset: number;
+  /** A checkpoint found under ANOTHER contract version: the input to the one re-reduce the chain
+   *  runs before anything else; cleared once it ran. */
+  #staleCheckpoint?: { reducedThroughOffset: number; state: State };
+  /** The highest `range.through` ever SHOWN to this processor (see processEventBatch). */
+  #pushedThroughOffset?: number;
+  /** The host's word that a row pushes this processor every commit it consumes (the constructor's
+   *  `fedByPushes`) — what lets a head read from the log count as shown. */
+  readonly #fedByPushes: boolean;
+  /** The highest head a catch-up of a processor FED BY PUSHES reduced through (`#showHeadReadFromLog`):
+   *  every commit past it that the processor consumes reaches it as a push, so the read verbs trust it
+   *  as a push's head. In memory only — a fresh incarnation catches up once before it trusts any. */
+  #headReadFromLogOffset?: number;
+  /** A refusal that can only repeat — the checkpoint over its cell (REDUCE_CHECKPOINT_TOO_LARGE):
+   *  LATCHED for this incarnation, so every later batch, catch-up and read verb rejects with it at
+   *  once instead of re-reducing into the same wall on every push and wake. A fresh incarnation
+   *  tries once more. */
+  #latchedRefusal?: Error;
+  /** waitUntilProcessed's waiting callers, resolved as the cursor advances. */
+  readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
+  /** Born with the engine, so its epoch is minted once per incarnation. */
+  readonly #liveState: LiveState<unknown>;
+  /** Rule 3's claim: attempts in flight, and how many revives found one still in flight (the
+   *  backoff of the next claim; reset when the last attempt settles). The claim calls ride ONE
+   *  chain, so a release never overtakes the claim of the attempt that followed it. */
+  #backgroundWorkInFlight = 0;
+  #revivesWhileBusy = 0;
+  #claimChain: Promise<unknown> = Promise.resolve();
+  /** Whether the last batch this engine ran carried the at-head pass (rule 5) — what `revive()`
+   *  reads to know if its catch-up already ran one. */
+  #lastBatchAtHead = false;
+  readonly #kv: EngineKv | undefined;
+  readonly #codeId: string | undefined;
+  /** The cause of the newest event this engine processed: what an eventless at-head pass runs under. */
+  #headCause: EventCause | undefined;
+
+  constructor(
+    processor: StreamProcessor<State>,
+    deps: {
+      stream: ProcessorStream;
+      storage: ReduceCheckpointTable;
+      /** The host's word that a subscription row pushes this processor every commit it consumes
+       *  (`processEventBatch`). The read verbs then trust the head a catch-up read until a push shows
+       *  a later one; absent, only a push's head is trusted, so an unpushed processor reads each time. */
+      fedByPushes?: boolean;
+      /** The host's durable key-value storage, where work in flight keeps its started marker and
+       *  its deaths (rule 3). Absent (a unit test): no death is counted. */
+      kv?: EngineKv;
+      /** The code the host runs, as its parent names it (iterate/sdk FacetProps): work that died
+       *  with a host restarted onto other code died of no fault of its own, and is no death. */
+      codeId?: string;
+    },
+  ) {
+    this.processor = processor;
+    this.#contract = processor.contract;
+    this.#stream = deps.stream;
+    this.#storage = deps.storage;
+    this.#fedByPushes = deps.fedByPushes === true;
+    this.#kv = deps.kv;
+    this.#codeId = deps.codeId;
+    // ONE row, so cursor and state never disagree; one written under another contract version is
+    // kept as #staleCheckpoint for the chain's first work.
+    const { slug, version } = this.#contract;
+    const checkpoint = this.#storage.read<State>(slug);
+    if (checkpoint?.reducerVersion === version) {
+      this.#reducedState = checkpoint.state ?? this.#contract.initialState();
+      this.#reducedThroughOffset = checkpoint.reducedThroughOffset;
+    } else {
+      this.#reducedState = this.#contract.initialState();
+      this.#reducedThroughOffset = 0;
+      if (checkpoint)
+        this.#staleCheckpoint = {
+          reducedThroughOffset: checkpoint.reducedThroughOffset,
+          state: checkpoint.state ?? this.#reducedState,
+        };
+    }
+    // Seeded with the projection of the state this incarnation starts from — after a version bump
+    // the OLD version's, so the publish that follows the re-reduce emits the one heal delta clients
+    // synced to the old state need. The projection is the author's code: a throw here costs the
+    // seed, never the engine.
+    let seed: unknown;
+    try {
+      seed = processor.projectLiveState(
+        this.#staleCheckpoint ? this.#staleCheckpoint.state : this.#reducedState,
+      );
+    } catch (error) {
+      reportIssue("processor.live-state", error, { slug });
+      seed = undefined;
+    }
+    this.#liveState = new LiveState(this.#stream, slug, seed);
+  }
+
+  /** THE SEED READ for live-state clients (LiveState.snapshot), caught up first. */
+  async liveSnapshot(): Promise<{ rev: number; state: unknown }> {
+    if (!this.#reducedThroughPushedHead()) await this.catchUpFromLog();
+    return this.#liveState.snapshot();
+  }
+
+  /** Emit a delta for the CURRENT projection (reduced + any runtime fields) if it changed. The engine
+   *  calls this after every batch; the host calls it after a runtime field moved outside a batch. A
+   *  throwing projection loses only its notification (the client re-seeds on the chain gap). */
+  publishLiveState(): void {
+    let projection: unknown;
+    try {
+      projection = this.processor.projectLiveState(this.#reducedState);
+    } catch (error) {
+      reportIssue("processor.live-state", error, { slug: this.#contract.slug });
+      return;
+    }
+    this.#liveState.set(projection);
+  }
+
+  // ── driving the reduce ──
+
+  /** THE push method: contiguous → reduce it directly (no read); anything else → gap repair from the
+   *  own cursor first. Fire-and-forget safe: enqueues on the serial chain. */
+  processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
+    // Recorded SYNCHRONOUSLY: the head this processor has been SHOWN. Read verbs skip their catch-up
+    // when the reduce has provably reached it — the fast path that deletes one parent read RPC from
+    // every capability dispatch once caught up.
+    this.#pushedThroughOffset = Math.max(this.#pushedThroughOffset ?? 0, range.through);
+    return this.#runOnSerialChain(async () => {
+      await this.#rereduceIfVersionChanged();
+      // GAP REPAIR heals the durable prefix from the log FIRST — up to the push start and no
+      // further, because the push carries fresh ephemerals the log cannot return, so the push
+      // itself is processed afterwards, never replaced by a catch-up. The repair never delivers
+      // caughtUp: the push decides at-head. The log can run out below `range.after` only when that
+      // offset was handed to an ephemeral — then there is nothing durable left to heal.
+      while (this.#reducedThroughOffset < range.after) {
+        const after = this.#reducedThroughOffset;
+        const page = await this.#stream.read(after, 500);
+        if (page.scannedThroughOffset <= after) break;
+        await this.#reduceAndCommitEventBatch(
+          page.events.filter((event) => event.offset <= range.after),
+          { after, through: Math.min(page.scannedThroughOffset, range.after) },
+          false,
+        );
+      }
+      // ALWAYS process the push — no push is ever discarded (a wholly-behind one reduces nothing and
+      // just delivers its ephemerals). At head iff this push reaches the head shown so far.
+      await this.#reduceAndCommitEventBatch(
+        events,
+        range,
+        range.through >= this.#pushedThroughOffset!,
+      );
+    });
+  }
+
+  /** Catch up from the own checkpoint (a cold boot, the read verbs, the barrier), page by page — a
+   *  failed batch, a missed push, or a fresh incarnation can never skip a durable event. */
+  catchUpFromLog(): Promise<void> {
+    return this.#runOnSerialChain(async () => {
+      await this.#rereduceIfVersionChanged();
+      for (;;) {
+        const after = this.#reducedThroughOffset;
+        const page = await this.#stream.read(after, 500);
+        if (page.scannedThroughOffset <= after) {
+          // Nothing beyond the cursor: at head already.
+          if (page.atHead) this.#showHeadReadFromLog(after);
+          return;
+        }
+        // The page says whether it reached the head — never judge by its length (rule 5's caught-up
+        // pass rides the last page).
+        await this.#reduceAndCommitEventBatch(
+          page.events,
+          { after, through: page.scannedThroughOffset },
+          page.atHead,
+        );
+        if (page.atHead) {
+          this.#showHeadReadFromLog(page.scannedThroughOffset);
+          return;
+        }
+      }
+    });
+  }
+
+  /** A catch-up reduced through `reducedThroughOffset`, the head its last page reached: for a
+   *  processor FED BY PUSHES, the head is SHOWN. Every later commit it consumes reaches it as a push,
+   *  whose `range.through` is recorded the moment the push arrives, so a read that follows the push
+   *  catches up again; the host holds a read back until the pushes it owes have arrived (the header's
+   *  read verbs), so while none arrives, nothing it consumes has landed and its reads stop re-reading
+   *  the log. A processor nothing pushes records nothing: it learns of a new event only by reading. */
+  #showHeadReadFromLog(reducedThroughOffset: number): void {
+    if (!this.#fedByPushes) return;
+    this.#headReadFromLogOffset = Math.max(this.#headReadFromLogOffset ?? 0, reducedThroughOffset);
+  }
+
+  // ── the read surface ──
+
+  /** Reduce-and-effects caught up through the log, then `{ offset, state }`. */
+  async snapshot(): Promise<{ offset: number; state: State }> {
+    if (!this.#reducedThroughPushedHead()) await this.catchUpFromLog();
+    return { offset: this.#reducedThroughOffset, state: this.#reducedState };
+  }
+
+  /** Provably reduced through the head SHOWN so far — the highest a push showed or, fed by pushes, a
+   *  catch-up read — → the read verbs skip their catch-up read. Nothing shown yet (a fresh
+   *  incarnation, or an unpushed processor) → they read. Whether a PUSH reaches the head (rule 5)
+   *  is still judged against pushes alone (processEventBatch). */
+  #reducedThroughPushedHead(): boolean {
+    const shownHeadOffset =
+      this.#headReadFromLogOffset === undefined
+        ? this.#pushedThroughOffset
+        : Math.max(this.#pushedThroughOffset ?? 0, this.#headReadFromLogOffset);
+    return shownHeadOffset !== undefined && this.#reducedThroughOffset >= shownHeadOffset;
+  }
+
+  /** THE barrier verb (read-your-writes): resolves once processed AT LEAST through `offset`. An
+   *  offset ABOVE the durable mark (an ephemeral's) is reached only if this processor was pushed it —
+   *  the log cannot prove past the mark, so a wake alone never advances there. */
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    const { offset, timeoutMs = 10_000 } = input;
+    return new Promise<void>((resolve, reject) => {
+      if (this.#reducedThroughOffset >= offset) return resolve();
+      const waiter = {
+        offset,
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      };
+      const timer = setTimeout(() => {
+        // A timed-out waiter LEAVES the list — otherwise every later batch re-scans it forever.
+        this.#waitUntilProcessedWaiters.splice(this.#waitUntilProcessedWaiters.indexOf(waiter), 1);
+        reject(
+          new Error(
+            `processor "${this.#contract.slug}" did not reach offset ${offset} in ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      this.#waitUntilProcessedWaiters.push(waiter);
+      // A rejecting catch-up (read threw) rejects THIS waiter promptly with the real error, not a
+      // wait-until-timeout with a generic message.
+      void this.catchUpFromLog().catch((error) => {
+        const i = this.#waitUntilProcessedWaiters.indexOf(waiter);
+        if (i === -1) return; // already resolved/timed-out
+        this.#waitUntilProcessedWaiters.splice(i, 1);
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  // ── the engine (private) ──
+
+  /** Serialize on the chain. THE RULE: never await your own chain from inside a batch — a
+   *  processor that appends during its batch would deadlock, which is why every append→drive
+   *  caller is fire-and-forget. */
+  #runOnSerialChain(work: () => Promise<void>): Promise<void> {
+    const run = this.#serialBatchChain.then(() => {
+      if (this.#latchedRefusal) throw this.#latchedRefusal;
+      return work();
+    });
+    this.#serialBatchChain = run.catch(() => {}); // a failed batch never wedges the chain; retry via wake
+    return run;
+  }
+
+  /** The one-time cost of a contract version bump: re-reduce the durable log from offset 0 through
+   *  the OLD cursor (`reduce` only — those effects already ran) and checkpoint under the new
+   *  version. Never past the old cursor: re-reducing to the head instead would judge an
+   *  already-queued in-flight push stale and swallow its effects. */
+  async #rereduceIfVersionChanged(): Promise<void> {
+    if (!this.#staleCheckpoint) return;
+    const target = this.#staleCheckpoint.reducedThroughOffset;
+    let state = this.#contract.initialState();
+    let reducedThroughOffset = 0;
+    while (reducedThroughOffset < target) {
+      const page = await this.#stream.read(reducedThroughOffset, 500);
+      for (const event of page.events)
+        if (event.offset <= target && reducesEvent(this.#contract.consumes, event))
+          // The SAME validate+normalize+fold as the live flow — a replay must reproduce it exactly,
+          // else a coercion applied live but not here would make a version bump rewrite state.
+          state = this.#validateNormalizeAndReduce(event, state).state;
+      if (page.scannedThroughOffset <= reducedThroughOffset) break; // nothing left below the target
+      reducedThroughOffset = Math.min(page.scannedThroughOffset, target);
+    }
+    this.#writeCheckpointOrLatch(
+      this.#contract.slug,
+      { reducerVersion: this.#contract.version, reducedThroughOffset: target },
+      state,
+      true,
+    );
+    this.#reducedState = state;
+    this.#reducedThroughOffset = target;
+    this.#staleCheckpoint = undefined;
+    // The one heal delta for clients synced to the OLD version's projection (the constructor's seed).
+    this.publishLiveState();
+    this.#resolveWaitUntilProcessedWaiters(target);
+  }
+
+  /** Rules 2–5 over one range (the caller has healed any durable prefix gap first). DURABLES reduce
+   *  at-most-once (`offset > cursor`); EPHEMERALS ALWAYS deliver — each rides exactly one push and
+   *  can never be a redelivery, so a durable-only wake that clamped the cursor PAST an ephemeral
+   *  offset must not suppress it. The cursor is a DURABLE-reduce watermark and never regresses. */
+  async #reduceAndCommitEventBatch(
+    events: StreamEvent[],
+    range: ScannedRange,
+    atHead: boolean,
+  ): Promise<void> {
+    const reducedThroughOffsetBefore = this.#reducedThroughOffset;
+    const stateBefore = this.#reducedState;
+    let state = stateBefore;
+    const consumableEvents = events.filter(
+      (event) =>
+        reducesEvent(this.#contract.consumes, event) &&
+        (event.ephemeral || event.offset > reducedThroughOffsetBefore),
+    );
+    let caughtUpDelivered = false;
+    for (let i = 0; i < consumableEvents.length; i++) {
+      const last = i === consumableEvents.length - 1;
+      const r = await this.#reduceAndProcessEvent(consumableEvents[i], state, atHead && last);
+      state = r.state;
+      // A skipped (malformed) last event never delivered caught-up — the eventless pass below does.
+      if (atHead && last && r.processed) caughtUpDelivered = true;
+    }
+    // Rule 5: reached the head with no caught-up event → one eventless at-head pass.
+    if (atHead && !caughtUpDelivered)
+      state = (await this.#reduceAndProcessEvent(null, state, true)).state;
+
+    // Rule 4: ONE persist per range, iff a DURABLE actually ADVANCED the cursor — `advanced`
+    // excludes a stale re-push (a no-op write), `sawDurable` the ephemeral-only range (the flood
+    // stays free).
+    const reducedThroughOffset = Math.max(reducedThroughOffsetBefore, range.through);
+    const advanced = reducedThroughOffset > reducedThroughOffsetBefore;
+    const sawDurable = events.some((event) => !event.ephemeral);
+    if (sawDurable && advanced)
+      this.#writeCheckpointOrLatch(
+        this.#contract.slug,
+        { reducerVersion: this.#contract.version, reducedThroughOffset },
+        state,
+        state !== stateBefore,
+      );
+    this.#reducedState = state;
+    this.#reducedThroughOffset = reducedThroughOffset;
+    this.#lastBatchAtHead = atHead;
+    this.#resolveWaitUntilProcessedWaiters(reducedThroughOffset);
+    // Persist FIRST, emit the live-state delta second: a crash between loses only a notification,
+    // healed by the chain gap, never state. Re-projected after EVERY batch, not only when the reduce
+    // moved, so a runtime field bumped inside `processEvent` publishes on its own.
+    this.publishLiveState();
+  }
+
+  // ── rule 3's claim: work in flight ⇒ a claim on the context's alarm ──
+
+  /** Start an attempt: the first in flight claims the alarm (not awaited — a claim that has not
+   *  landed when the host dies revives nothing either way, and the attempt must not wait on it);
+   *  the last to settle releases the claim. */
+  #runInBackground(work: () => Promise<unknown>): void {
+    this.#backgroundWorkInFlight += 1;
+    if (this.#backgroundWorkInFlight === 1) {
+      // THE STARTED MARKER: what tells a revive that this host died with work in flight.
+      this.#kv?.put(STARTED, {
+        deaths: this.#kv.get<Started>(STARTED)?.deaths ?? 0,
+        codeId: this.#codeId,
+      });
+      this.#claim(REVIVE_AFTER_MS);
+    }
+    void work()
+      .catch(unlessLoopLimit)
+      .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
+      .finally(() => {
+        this.#backgroundWorkInFlight -= 1;
+        if (this.#backgroundWorkInFlight === 0) {
+          this.#revivesWhileBusy = 0;
+          this.#kv?.delete(STARTED); // settled: the deaths start over
+          this.#claim(null);
+        }
+      });
+  }
+
+  #claim(afterMs: number | null): void {
+    const at = afterMs === null ? null : Date.now() + afterMs;
+    this.#claimChain = this.#claimChain
+      .then(() => this.#stream.claim(at))
+      .catch((error) => reportIssue("processor.claim", error, { slug: this.#contract.slug }));
+  }
+
+  /** THE REVIVE — the context's alarm pass calls this for a due claim (spent by then): catch up
+   *  from the log and run the at-head pass, so a processor restarts what state says is still owed
+   *  (rule 3). A fresh incarnation finds nothing in flight and starts it; an attempt still in flight
+   *  here claims again, later each time (20 s, 40 s, … `REVIVE_AFTER_MAX_MS`). */
+  async revive(): Promise<void> {
+    // A revive that finds nothing in flight where work was started is a DEATH, counted across
+    // restarts — but not one onto other code (the host's own commit, a deploy), which starts the
+    // count over. At MAX_DEATHS the work is failed: the revive throws PERMANENT_FAILURE, the host
+    // records it, and only what the processor next receives starts the work again.
+    const started = this.#kv?.get<Started>(STARTED);
+    if (started && this.#backgroundWorkInFlight === 0) {
+      const deaths = started.codeId === this.#codeId ? started.deaths + 1 : 0;
+      this.#kv!.put(STARTED, { deaths, codeId: this.#codeId });
+      if (deaths >= MAX_DEATHS)
+        throw codedError(
+          "PERMANENT_FAILURE",
+          `processor "${this.#contract.slug}": its work in flight died with its host ${deaths} times, so it is not started again until the processor receives an event`,
+        );
+    }
+    this.#lastBatchAtHead = false;
+    await this.catchUpFromLog();
+    // A catch-up that reached the head already ran the at-head pass (rule 5); one that found
+    // nothing to read runs it here, once.
+    if (!this.#lastBatchAtHead)
+      await this.#runOnSerialChain(async () => {
+        this.#reducedState = (
+          await this.#reduceAndProcessEvent(null, this.#reducedState, true)
+        ).state;
+        this.publishLiveState();
+      });
+    if (this.#backgroundWorkInFlight === 0) return;
+    this.#revivesWhileBusy += 1;
+    this.#claim(Math.min(REVIVE_AFTER_MS * 2 ** this.#revivesWhileBusy, REVIVE_AFTER_MAX_MS));
+    // Awaited: the pass that called this derives its next deadline as soon as it returns, so the
+    // claim must have landed by then — one alarm write, not a delete and a set.
+    await this.#claimChain;
+  }
+
+  /** THE GUARDED REDUCE, shared by the live flow and the version replay. A reducer that throws on an
+   *  event (malformed, or one an OLDER version accepted) must never wedge the processor: on a version
+   *  replay it would fail the catch-up before the new checkpoint is written, every incarnation. */
+  #reduceOrKeep(event: StreamEvent, state: State): State {
+    try {
+      return this.processor.reduce({ event, state }) ?? state;
+    } catch (error) {
+      reportIssue("processor.reduce", error, { slug: this.#contract.slug, offset: event.offset });
+      return state;
+    }
+  }
+
+  /** Validate a consumed event's payload against the contract's declared schema, then reduce it — or,
+   *  for a malformed payload, skip the fold and report (it must never corrupt reduced state, the
+   *  exported view a live client parses). Returns the next state AND the event to carry onward,
+   *  NORMALIZED to the schema's `z.output` (coercions/defaults applied) when it validated — so the
+   *  reducer, the effect hook, and the version replay all see exactly what `ConsumedEvent<Contract>`
+   *  promises. SHARED by the live flow and `#rereduceIfVersionChanged`, so the two can never diverge
+   *  (a coercion applied live but not on replay would make a version bump rewrite state). A payload-less
+   *  event validates as `{}` (the "empty defaults" convention the contract requires of its stateSchema);
+   *  a contract with no `events` catalog (the kernel-generic processors) folds unvalidated. */
+  #validateNormalizeAndReduce(
+    event: StreamEvent,
+    state: State,
+  ): { state: State; event: StreamEvent; valid: boolean } {
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- only a null/undefined payload defaults to {}; a falsy NON-object payload off the wire (0, false, "") must fail schema validation and be reported, not be folded as an empty object
+    const parsed = this.#contract.payloadSchemaFor(event.type)?.safeParse(event.payload ?? {});
+    if (parsed && !parsed.success) {
+      reportIssue("processor.reduce.payload", parsed.error, {
+        slug: this.#contract.slug,
+        offset: event.offset,
+        type: event.type,
+      });
+      return { state, event, valid: false }; // malformed: not folded, and the caller skips its effect
+    }
+    // Owned-event payloads are object schemas, so `z.output` is a record.
+    const normalized = parsed
+      ? { ...event, payload: parsed.data as Record<string, unknown> }
+      : event;
+    return { state: this.#reduceOrKeep(normalized, state), event: normalized, valid: true };
+  }
+
+  /** THE per-event primitive (rules 2–3) — the batch loop and the eventless at-head pass both come
+   *  here: a GUARDED reduce, then `processEvent` with a FIFO blocker chain drained to a FIXED POINT.
+   *  Returns the next state and whether the effect ran — a malformed payload for a KNOWN event is
+   *  SKIPPED for BOTH reduce and effect (the effect hook is typed against `ConsumedEvent`'s `z.output`,
+   *  so handing it garbage would throw and wedge the batch — checkpoints never advance, catch-up
+   *  refails the same row); `processed: false` lets the batch fall back to the eventless caught-up pass.
+   *  Owns NO cursor / persist / waiter — the caller does. */
+  async #reduceAndProcessEvent(
+    event: StreamEvent | null,
+    state: State,
+    caughtUp: boolean,
+  ): Promise<{ state: State; processed: boolean }> {
+    const { slug, version, emits } = this.#contract;
+    const previousState = state;
+    if (event) {
+      // Validate + normalize + fold via the ONE shared path (so replay can't diverge). On the valid
+      // path the reducer AND the effect hook below both see the NORMALIZED event (schema `z.output`);
+      // a malformed payload is neither folded nor delivered to the (typed) effect hook.
+      const reduced = this.#validateNormalizeAndReduce(event, state);
+      if (!reduced.valid) return { state: reduced.state, processed: false };
+      state = reduced.state;
+      event = reduced.event;
+    }
+    // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
+    let blockers: Promise<unknown> = Promise.resolve();
+    // Validated against the declared `emits` and stamped with provenance. A certificate an entity
+    // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
+    // through the host's `getItx` — the context's own append, no second verb here.
+    const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
+      for (const emitted of emittedEvents) {
+        if (!emits.includes(emitted.type))
+          throw new Error(
+            `processor "${slug}" emits ${JSON.stringify(emitted.type)} without declaring it`,
+          );
+        emitted.source = {
+          processor: {
+            slug,
+            version,
+            ...(event && { whileProcessing: { offset: event.offset, type: event.type } }),
+          },
+        };
+      }
+      return emittedEvents;
+    };
+    // A PROCESSOR'S EFFECTS (core/os src/cause.ts), each bound to its event's cause — an eventless
+    // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
+    // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
+    // code, one hand-off deeper.
+    if (event?.source?.cause)
+      this.#headCause = { ...event.source.cause, parent: `${event.path}@${event.offset}` };
+    const own = this.#headCause;
+    const beyond = own && { ...own, depth: own.depth + 1 };
+    const under = <T>(cause: EventCause | undefined, work: () => T): T => runCausedBy(cause, work);
+    under(beyond, () =>
+      this.processor.processEvent({
+        event,
+        state,
+        previousState,
+        append: async (...emittedEvents) =>
+          await under(own, () => this.#stream.append(...stamped(emittedEvents))),
+        blockProcessorWhile: (work) => {
+          // An act refused as a loop is the loop's end, never this event's failure.
+          blockers = blockers.then(() => under(beyond, work)).catch(unlessLoopLimit);
+        },
+        runInBackground: (work) => this.#runInBackground(() => under(beyond, work)),
+        delivery: { caughtUp },
+      }),
+    );
+    // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A
+    // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS event's
+    // blocking work), so re-await until it stops growing — latching the pre-nesting snapshot would
+    // let the next event's processEvent (and the batch commit) overtake it.
+    for (let awaited: Promise<unknown> | undefined; awaited !== blockers;) {
+      awaited = blockers;
+      await awaited;
+    }
+    return { state, processed: true };
+  }
+
+  /** The checkpoint write, with the latch: REDUCE_CHECKPOINT_TOO_LARGE can only repeat. */
+  #writeCheckpointOrLatch(
+    slug: string,
+    cursor: { reducerVersion: string; reducedThroughOffset: number },
+    state: State,
+    stateChanged: boolean,
+  ): void {
+    try {
+      this.#storage.write(slug, cursor, state, stateChanged);
+    } catch (error) {
+      if (errorCode(error) === "REDUCE_CHECKPOINT_TOO_LARGE")
+        this.#latchedRefusal = error instanceof Error ? error : new Error(String(error));
+      throw error;
+    }
+  }
+
+  /** Resolve the waiters a cursor advance satisfies; keep the rest. */
+  #resolveWaitUntilProcessedWaiters(reducedThroughOffset: number): void {
+    for (const w of this.#waitUntilProcessedWaiters.splice(0)) {
+      if (reducedThroughOffset >= w.offset) w.resolve();
+      else this.#waitUntilProcessedWaiters.push(w);
+    }
+  }
+}
+
+// ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
+// runtime validator (contract.ts has the zod half).
+
+/** Why an event happened (`source.cause`): its chain, its depth, and the event whose handling wrote
+ *  it (`<path>@<offset>`), if any. */
+type EventCause = { chain: string; depth: number; parent?: string };
+
+/** What `append` accepts: the event body, before the stream assigns its committed identity. The
+ *  append method checks ONE rule by hand: `type` is a non-empty string. */
+export type StreamEventInput = {
+  /** `events.iterate.com/<namespace>/<event>` for the platform's types, named by the rules in
+   *  core/lib/README.md#event-types; any other string is the appender's own. */
+  type: string;
+  payload?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  /** PROVENANCE, stamped by the platform as the event commits (core/os caller.ts `stampCaller`): a
+   *  writer's own `source` is dropped but for `processor`, the engine's label. */
+  source?: {
+    /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
+     *  at, whichever context it was appended to. Every committed event carries it (`StreamEvent`):
+     *  the platform's own records of a context (its birth, a wake, a run's settlement) carry the
+     *  context's own path. */
+    origin?: string;
+    /** WHY IT HAPPENED, stamped by the platform (a writer's own is dropped): the chain of reactions
+     *  it belongs to — when and where that began — how many hand-offs deep in it, and the event
+     *  whose handling wrote it. Past 8, code reacting to code may read but not act, and the
+     *  `itx/loop-limit` fact says where it stopped. */
+    cause?: EventCause;
+    /** The durable schedule definition responsible for this occurrence. */
+    schedule?: {
+      key: string;
+      scheduledAtOffset: number;
+      at: string;
+      /** Attribution of the definition, distinct from the platform writing the occurrence. */
+      definedBy?: Omit<NonNullable<StreamEventInput["source"]>, "schedule">;
+    };
+    /** Which processor wrote it, while processing what — the engine's own label (below), the one
+     *  field a writer keeps: its word, under the platform's `origin`. */
+    processor?: {
+      slug: string;
+      version: string;
+      whileProcessing?: { offset: number; type: string };
+    };
+    principal?: Principal;
+    /** THE CONNECTION the principal acted through: the OAuth grant's id — one per
+     *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
+     *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
+    grant?: string;
+    /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
+     *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
+     *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
+     *  how: core/os/src/on-behalf-of.ts. */
+    onBehalfOf?: { principal: Principal; grant?: string; run: string };
+    /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
+     *  what a processor folding an account's or an organization's facts requires — a client can
+     *  append any type to a context it holds, never this. */
+    platform?: true;
+  };
+  /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
+  idempotencyKey?: string;
+  /** OPTIONAL PRECONDITION: land at exactly this offset or refuse the whole batch with
+   *  OFFSET_CONFLICT — "nothing has happened since I last looked". Never stored in the body. */
+  offset?: number;
+  /** An EPHEMERAL event rides the stream to live subscribers but is NEVER persisted: it consumes an
+   *  offset, triggers zero writes, and its body is gone the moment the incarnation ends — nobody can
+   *  redeliver it (stream.ts, the zero-write contract). A durable OMITS the field. */
+  ephemeral?: true;
+};
+
+/** A committed event: the input plus the identity the stream assigned at its commit point, and the
+ *  platform's `source`, whose `origin` every commit carries (core/os stream.ts). */
+export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
+  offset: number;
+  createdAt: string;
+  path: string;
+  source: NonNullable<StreamEventInput["source"]> & { origin: string };
+};
+
+// ── idempotency ── the one conflict message, which core/os stream.ts and test-support's
+// `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
+
+export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
+  return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;
+}
+
+/** Structural equality of the parts an idempotent retry must not change. */
+export function sameIdempotentEvent(
+  existingEvent: StreamEventInput,
+  requestedEvent: StreamEventInput,
+): boolean {
+  return (
+    existingEvent.type === requestedEvent.type &&
+    jsonEqual(existingEvent.payload, requestedEvent.payload) &&
+    jsonEqual(existingEvent.metadata, requestedEvent.metadata)
+  );
+}
+
+// ── reduce checkpoint ── THE ONE spelling of a persisted reduce checkpoint, shared by BOTH hosts (the
+// stream's core reduce and the facet-hosted `ProcessorEngine`). ONE ROW per slug: the reducer
+// version, the offset reduced through, and the state as JSON (NULL = the reduce never changed it =
+// `initialState()` — a pure side-effect processor reusing its cursor never re-fires its effect
+// history). ONE statement per write, so a checkpoint can never tear; the state column is rewritten
+// only when the reduce changed it (`COALESCE`).
+//
+// THE CELL CEILING: a checkpoint is one SQLite cell — 2 MB in production, SQLITE_TOOBIG past it. A
+// state whose JSON would not fit is refused BEFORE the write with a coded error, so the caller sees
+// why instead of the platform's raw message, and nothing lands. No cloudflare:workers import on
+// purpose: this module rides the SDK bundle into every facet isolate.
+
+/** Under the 2 MB cell, with room for the row's other columns. */
+const REDUCE_CHECKPOINT_STATE_MAX_CHARS = 2 * 1024 * 1024 - 4096;
+
+/** Sync SQLite as the platform hands it over (`ctx.storage.sql`): a query is a LAZY cursor —
+ *  iterate it, or `toArray()`. Spelled structurally so a node:sqlite stand-in satisfies it. */
+export type SqlStorageHandle = {
+  exec<T extends Record<string, SqlStorageValue>>(
+    query: string,
+    ...bindings: unknown[]
+  ): Iterable<T> & { toArray(): T[] };
+};
+
+/** A persisted checkpoint as read back: the version it was reduced under (the caller gates on it),
+ *  the offset reduced through, and the state — `undefined` when the reduce never changed it. */
+export type ReduceCheckpoint<State> = {
+  reducerVersion: string;
+  reducedThroughOffset: number;
+  state: State | undefined;
+};
+
+/** What BOTH hosts read and write their checkpoints through — the stream's storage and a facet's
+ *  own (the Node unit tests drive it over node:sqlite, stream/test-support.ts). */
+export class ReduceCheckpointTable {
+  readonly #sql: SqlStorageHandle;
+
+  /** `createTable: false` when the caller knows the table exists (the stream's storage skips every
+   *  CREATE on a re-wake); a facet host constructs one per incarnation and lets it create. */
+  constructor(sql: SqlStorageHandle, options: { createTable: boolean } = { createTable: true }) {
+    this.#sql = sql;
+    if (options.createTable) ReduceCheckpointTable.createTable(sql);
+  }
+
+  static createTable(sql: SqlStorageHandle): void {
+    sql.exec(
+      `CREATE TABLE IF NOT EXISTS reduce_checkpoints (
+         slug TEXT PRIMARY KEY,
+         reducer_version TEXT NOT NULL,
+         reduced_through_offset INTEGER NOT NULL,
+         state TEXT
+       )`,
+    );
+  }
+
+  read<State>(slug: string): ReduceCheckpoint<State> | undefined {
+    const row = this.#sql
+      .exec<{ reducer_version: string; reduced_through_offset: number; state: string | null }>(
+        "SELECT reducer_version, reduced_through_offset, state FROM reduce_checkpoints WHERE slug = ?",
+        slug,
+      )
+      .toArray()[0];
+    if (!row) return undefined;
+    return {
+      reducerVersion: String(row.reducer_version),
+      reducedThroughOffset: Number(row.reduced_through_offset),
+      state: row.state ? (JSON.parse(String(row.state)) as State) : undefined,
+    };
+  }
+
+  /** ALWAYS the cursor; the state ONLY when `stateChanged` — one write either way. */
+  write<State>(
+    slug: string,
+    cursor: { reducerVersion: string; reducedThroughOffset: number },
+    state: State,
+    stateChanged: boolean,
+  ): void {
+    const serializedState = stateChanged ? (JSON.stringify(state) ?? null) : null;
+    // The same state serializes to the same size on every retry: a delivery loop halts on the code
+    // instead of climbing its ladder.
+    if (serializedState && serializedState.length > REDUCE_CHECKPOINT_STATE_MAX_CHARS)
+      throw codedError(
+        "REDUCE_CHECKPOINT_TOO_LARGE",
+        `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
+        { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
+      );
+    this.#sql.exec(
+      `INSERT INTO reduce_checkpoints (slug, reducer_version, reduced_through_offset, state)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(slug) DO UPDATE SET
+           reducer_version = excluded.reducer_version,
+           reduced_through_offset = excluded.reduced_through_offset,
+           state = COALESCE(excluded.state, reduce_checkpoints.state)`,
+      slug,
+      cursor.reducerVersion,
+      cursor.reducedThroughOffset,
+      serializedState,
+    );
+  }
+}
+
+// ── live state ── THE live-state primitive: one value, its revision chain, and the diff→emit
+// dance Phoenix LiveView does, over the project's stream. Used two ways: a mini-app DO owns one
+// directly as its store; the ProcessorEngine owns one per processor and `set`s the projection after
+// every batch (sdk/index.ts shows both).
+//
+// MUTATION AND NOTIFICATION ARE INSEPARABLE: `set(next)` diffs the held value → next; on a real
+// change it bumps the revision and appends the ephemeral `itx/live-state-changed` delta carrying
+// `{key, from, to, patch}` onto the stream. `snapshot()` is the SEED READ. The stream keeps no
+// per-subscriber state — the CLIENT owns its chain: seed from `snapshot()`, apply a payload whose
+// `from` matches its held rev, re-read the seed on any mismatch (live-state-chains-client-side.e2e).
+//
+// The revision is seeded from a per-incarnation EPOCH (not 0): a reborn holder mints a fresh epoch,
+// so every stale client rev mismatches and re-reads the seed instead of applying a patch onto a
+// diverged base. Lossy by contract — a dropped delta append is a chain gap the client heals, never
+// state loss. HARD RULE: no processor can ever REDUCE the delta (processor.ts `reducesEvent`), so a
+// state-change notification can never feed a reduce; a SUBSCRIPTION may name the type to watch it.
+
+/** A delta whose patch is over this many chars is not sent: a whole-array replace of a large
+ *  projection would cost every watcher the projection per set, and past the event ceiling the append
+ *  would refuse it outright. The delta rides with `patch: null` instead — the rev moved, re-seed. */
+const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
+
+/** The only thing a LiveState needs from its host: somewhere to append the delta. A
+ *  `ProcessorStream` satisfies it; a facet that is no processor passes one scope per delta,
+ *  `{ append: async (e) => { using itx = this.getItx(); await itx.append(e); } }`, never a scope it
+ *  holds. A field initializer cannot await, so a facet builds its LiveState that way and
+ *  serves `snapshot()` as the client's seed read. */
+export type LiveStateSink = {
+  append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
+};
+
+export class LiveState<S> {
+  readonly #liveStateSink: LiveStateSink;
+  readonly #liveStateKey: string;
+  #state: S;
+  /** The DIFF BASE: the last value that serialized — what a client that applied every delta holds.
+   *  Kept apart from `#state` so a value the wire cannot carry, adopted without an emit, never
+   *  becomes the base every later diff would throw against. */
+  #lastSerializedState: S;
+  #liveStateRev: number;
+  /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
+   *  CROSS-HOP sink: its `getItx()` mints a FRESH scope per call, so two deltas
+   *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
+   *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
+   *  but it costs every watcher the full seed re-read the deltas exist to avoid. Every delta rides
+   *  this ONE chain and is emitted only after the previous append settles (see set()). Nobody waits
+   *  on this. */
+  #liveStateDeltaAppendChain: Promise<unknown> = Promise.resolve();
+
+  constructor(sink: LiveStateSink, key: string, initial: S) {
+    this.#liveStateSink = sink;
+    this.#liveStateKey = key;
+    this.#state = initial;
+    this.#lastSerializedState = initial;
+    this.#liveStateRev = Date.now() * 4096 + Math.floor(Math.random() * 4096);
+  }
+
+  /** The current value (reflects every `set`). */
+  get(): S {
+    return this.#state;
+  }
+
+  /** THE seed read: `{rev, state}` read together (single-threaded ⇒ atomically), which is what lets
+   *  a client chain patches exactly instead of guessing which changes its snapshot already contains. */
+  snapshot(): { rev: number; state: S } {
+    return { rev: this.#liveStateRev, state: this.#state };
+  }
+
+  /** Replace the value: diff the last serialized base → next; on a real change bump the revision
+   *  and append the delta. Build a NEW value (don't mutate `next` in place) — the diff is over JSON.
+   *  A diff/append failure degrades to a LOST notification (the client re-seeds on the chain gap),
+   *  never a throw the caller sees. */
+  set(next: S): void {
+    // The SAME object is the same JSON (the contract forbids in-place mutation, which is what makes
+    // identity a proof of equality): no diff, no delta, no rev move — the common case for a
+    // processor whose projection is its unchanged reduced state.
+    if (next === this.#lastSerializedState) return;
+    // A `next` the wire cannot carry (a BigInt, a cycle) throws in the diff: adopt it anyway, and
+    // STILL advance the rev — the bump mints the chain gap that forces a stale client's re-seed
+    // (without it, a later emit's `from` would match the client's held rev and it would apply a
+    // patch computed against a base it never received: silent corruption). The serialized base
+    // stays put, so the next serializable value emits as a diff from what the client last saw.
+    let patch;
+    try {
+      patch = diff(this.#lastSerializedState, next);
+    } catch {
+      this.#state = next;
+      this.#liveStateRev += 1;
+      return;
+    }
+    this.#state = next;
+    this.#lastSerializedState = next;
+    if (!patch) return;
+    const from = this.#liveStateRev;
+    const to = from + 1; // a LOCAL: a later set's rev must not be read into this delta's payload
+    this.#liveStateRev = to;
+    const wirePatch = JSON.stringify(patch).length > LIVE_STATE_PATCH_MAX_CHARS ? null : patch;
+    const emitDelta = () =>
+      this.#liveStateSink.append({
+        type: "events.iterate.com/itx/live-state-changed",
+        ephemeral: true,
+        payload: { key: this.#liveStateKey, from, to, patch: wirePatch },
+      });
+    // A cross-hop sink mints a FRESH capability per call, so two deltas can race on the wire: every
+    // delta rides ONE chain, each emitted only after the previous append settles, so mint order IS
+    // the delivery order. No in-flight flag + synchronous fast path — clearing the flag in the first
+    // append's `finally` while a later delta was still queued let a newer delta see "idle", fork a
+    // parallel chain, and overtake the queued one (commit order 1, 3, 2). The chain's own `.catch`
+    // contains a dropped delta (a sync throw or a rejection): a chain gap the client heals (the rev
+    // already advanced); it must never reach the caller.
+    this.#liveStateDeltaAppendChain = this.#liveStateDeltaAppendChain
+      .then(emitDelta)
+      .catch(() => {});
+  }
+}

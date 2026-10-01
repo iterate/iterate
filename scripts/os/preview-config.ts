@@ -22,14 +22,14 @@ import type { StartApp } from "../lib/start-app.ts";
 
 /** MAIN ON THE DEV/PREVIEW ACCOUNT (envs.ts `osEnvs.preview`): the account every per-commit
  *  deployment lives on, whose Doppler config (`os/preview`) holds its Cloudflare credentials and
- *  the two secrets each apps/os deploy ships. preview-parents.yml redeploys it from main. */
+ *  the two secrets each core/os deploy ships. preview-parents.yml redeploys it from main. */
 export const MAIN_ON_DEV = osEnvs.preview!;
 
 /** The longest prefix a deployment name takes (envs.ts `previewDeployment`): every worker and
  *  resource name of the set stays under Cloudflare's 63 characters. */
 export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
-/** The apps on top, each deployed beside apps/os as `<deployment>-<app>`. */
+/** The apps on top, each deployed beside core/os as `<deployment>-<app>`. */
 export const APPS: StartApp[] = [dash, agents, notes, docs, voice, kit, admin];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ export function previewPullRequestNumber(prefix: string) {
   return match ? Number(match[1]) : undefined;
 }
 
-/** A deployment's apps/os origin, and its apps' by name: envs.ts `previewDeployment`, for a name
+/** A deployment's core/os origin, and its apps' by name: envs.ts `previewDeployment`, for a name
  *  this module made. */
 export function previewDeploymentUrls(name: string) {
   const deployment = previewDeployment(name);
@@ -138,8 +138,8 @@ export function foldPreviewSection(
 /** A `Sign in ↗` link (scripts/os/preview.ts `signInLinks`): the app's own sign-in
  *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — with
  *  its `hints`: `provider_hint`, the way to sign in the platform's sign-in page leads with (the
- *  admin issuer, prd, for a reviewer: apps/os/src/login.server.ts), and `login_hint`, whom the consent page
- *  pre-fills under "Sign in as someone else" for an admin (apps/os/src/consent.ts). The admin still confirms
+ *  admin issuer, prd, for a reviewer: core/os/src/login.server.ts), and `login_hint`, whom the consent page
+ *  pre-fills under "Sign in as someone else" for an admin (core/os/src/consent.ts). The admin still confirms
  *  it: the link is public, and grants nothing. */
 export function appSignInLink(
   landing: string,
@@ -239,7 +239,7 @@ export function configTemplateNames(repoRoot: string) {
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
  *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
  *  the custom field prefilled), so the project is born from the unmerged template. `default` never
- *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (apps/os/scripts/build.ts). */
+ *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (core/os/scripts/build.ts). */
 export function templateQuickLaunches(input: {
   dashUrl: string;
   templates: string[];
@@ -263,9 +263,9 @@ export function templateQuickLaunches(input: {
 /** THE SECTION: quick links for a reader who already knows how per-commit deployments work
  *  (docs/dev-environments.md). It never explains itself; what needs explaining goes in a comment
  *  here. The CI checks carry the deploy's and the suites' verdicts, so it has no status of its own.
- *  One row per worker, apps/os first: its origin, its `Sign in ↗` (`signInLinkOf`: apps/os's into
+ *  One row per worker, core/os first: its origin, its `Sign in ↗` (`signInLinkOf`: core/os's into
  *  the Dash's project `pr<N>`, each app's into that app, as the PR's test person, whom a reviewer —
- *  one of prd's admins, signed in through prd (apps/os/src/admin-sign-in.ts) — confirms signing in as on
+ *  one of prd's admins, signed in through prd (core/os/src/admin-sign-in.ts) — confirms signing in as on
  *  the consent page; a proxied app's and the admin app's as the reviewer) and its Cloudflare
  *  dashboard page. With the
  *  Dash, one quick-launch link per config template into its New project sheet

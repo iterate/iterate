@@ -17,7 +17,7 @@
 // new: a repeat, never a miss.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
-// "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
+// "<area>.platform-failure-<action>", name, … })` (core/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
 // here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
 // A Cloudflare defect that only logs an error line, where no call failed, is pinned by a test and
@@ -92,7 +92,7 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
 /** One window's rows per signal: [label, count], biggest first. `serverErrors` are the 5xx
  *  visitors were answered, by URL, outside a cause's rays; `causes` holds those inside them. `pagers`
  *  is not a fault: the rpc-stub pagers' re-dial outcomes by event, which say whether a Durable
- *  Object's close was recovered (apps/os context/rpc-stub-relay.ts); one that gives up logs an
+ *  Object's close was recovered (core/os context/rpc-stub-relay.ts); one that gives up logs an
  *  error, which is. `closeResets` are the errors a context's socket close logged for a reset
  *  (CLOSE_RESET), by message: errors only when that recovery did not hold. `healEvents` is `heals`
  *  by event instead of by name, for PINNED_WORKAROUNDS. */
@@ -121,17 +121,17 @@ export const PINNED_WORKAROUNDS = [
     /** What every `event` of the workaround's heals starts with. */
     event: "iterate-context.platform-failure-alarm-",
     /** The post, once the heal has been absent `PIN_QUIET_DAYS`. */
-    post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts",
+    post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in core/os/src/alarm-coordinator.ts",
   },
   // The Worker Loader defect at facet start (https://github.com/iterate/alarm-loader-facet-repro),
   // healed at both of its call sites; worker-loader.ts `retire` serves both, and goes with the last.
   {
     event: "facet.platform-failure-",
-    post: "Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`)",
+    post: "Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in core/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`)",
   },
   {
     event: "workers.platform-failure-",
-    post: "Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts",
+    post: "Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in core/os/src/context/built-ins.ts",
   },
 ];
 export const PIN_QUIET_DAYS = 28;
@@ -400,7 +400,7 @@ export function incidentsOf(reading: FaultReading) {
     for (const [name, count] of reading.heals)
       add({ what: "platform-failure heals", label: name, count, hosts: {} });
   const pagers = Object.fromEntries(reading.pagers);
-  // a pager's drop is logged with its outcome (apps/os context/rpc-stub-relay.ts `redialPager`)
+  // a pager's drop is logged with its outcome (core/os context/rpc-stub-relay.ts `redialPager`)
   const recovered =
     (pagers["rpc-stub-pager-redialed"] ?? 0) > 0 && (pagers[PAGER_GAVE_UP] ?? 0) === 0;
   // An error is keyed by what it says, not by the ids and places in it. A failed invocation's
@@ -765,7 +765,7 @@ const ERROR_ROWS: Record<ErrorRows, LogFilter[]> = {
  * named in `keep` that its filters reject (null: every row). Counts not named are untouched.
  *
  * Two expression-fetch answers are 5xx on purpose, each logged at info by the context DO that
- * answered (apps/os iterate-context-durable-object.ts): a fetch route whose target is an offline
+ * answered (core/os iterate-context-durable-object.ts): a fetch route whose target is an offline
  * lent stub (`iterate tunnel` killed without Ctrl-C) answers 502, the upstream's absence, logged
  * `expression-fetch.rpc-stub-offline`, and a Vite tab left open re-requests it every second; a
  * deploy that reset a context the fetch dialed, when the hop could not send it again (a request
@@ -825,7 +825,7 @@ const RAY_OUTCOMES: RayOutcome[] = [
  * reset is meant to go through failed.
  */
 const CAUSE_NAMES = ["deploy reset", "version skew"] as const;
-/** An rpc-stub pager that could not re-dial within its bound (apps/os context/rpc-stub-relay.ts
+/** An rpc-stub pager that could not re-dial within its bound (core/os context/rpc-stub-relay.ts
  *  `redialPager`): the /api session's pager, in the ray of the deploy that reset its Durable
  *  Object. The bound exists so that a deploy's reset does not page; past it, the give-up does. */
 const PAGER_GAVE_UP = "rpc-stub-pager-redial-failed";
@@ -845,10 +845,10 @@ const EXPECTED_ERRORS = Object.values(CAUSES);
  * runtime logs for it itself, uncatchably: a reset the context DO asks for (`ctx.abort`: a destroyed
  * context, `itx.abort()`, a deleted root whose project came back), which the runtime logs in the
  * asking invocation and in every other call in flight that it rejects, and the constructor's refusal
- * of an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
+ * of an id nothing was born at, the context sweep's lookup of an object emptied moments ago (core/os
  * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). And a facet deleted with
  * its hosting row, whose cut-off call session the runtime logs as a bare `<class>.jsrpc` summary
- * (apps/os context/facet-host.ts `#deleteFacet`). An error line whose message a Durable Object
+ * (core/os context/facet-host.ts `#deleteFacet`). An error line whose message a Durable Object
  * announced in the window, in that Durable Object, is that outcome and pages nothing, and its
  * invocation's summary folds into it; so does a summary with no line that the Durable Object
  * announced (folded-summaries). The same error in a Durable Object that announced nothing pages.
@@ -895,13 +895,13 @@ const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: FALSE_HUNG,
-    pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
+    pin: "test/vitest/agents/ai-stream-hung-request.e2e.test.ts",
     pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
   },
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: RPC_BODY_ENDED_EARLY,
-    pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
+    pin: "test/vitest/os/forwarded-rpc-body.test.ts",
     pages: [
       leaf("$metadata.message", "includes", RPC_BODY_ENDED_EARLY),
       notOn("IterateContextDurableObject"),

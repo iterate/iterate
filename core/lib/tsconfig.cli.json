@@ -1,0 +1,10 @@
+{
+  // The CLI (src/cli, the `iterate` bin's module) and its tests: Node code, typed against Node's
+  // types alone, as it was in its own package. The SDK modules it imports come along.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["src/cli"]
+}

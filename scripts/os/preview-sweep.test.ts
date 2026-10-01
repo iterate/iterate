@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../envs.ts";
-import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { readWranglerBase } from "../../core/os/scripts/generate-wrangler-config.ts";
 import { accountWorkerNames, MAIN_ON_DEV } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
@@ -17,7 +17,7 @@ import {
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 
-test("a deployment's members: its eight workers, then apps/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
+test("a deployment's members: its eight workers, then core/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
   expect(previewMemberSuffixes(kvBindings())).toEqual({
     worker: ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"],
     kv: ["os-itx-kv", "os-oauth-kv"],
@@ -63,12 +63,12 @@ test("members group into deployments by name; nothing of another shape on the ac
   ]);
 });
 
-test("a test-only run tests its prefix's newest deployment that has its apps/os worker", () => {
+test("a test-only run tests its prefix's newest deployment that has its core/os worker", () => {
   const deployments = group([
     worker("pr7-1111111-os", 5),
     worker("pr7-2222222-os", 1),
     worker("pr8-3333333-os", 0.5),
-    // a newer push whose deploy failed before apps/os uploaded
+    // a newer push whose deploy failed before core/os uploaded
     d1("pr7-4444444-os-db", 0.2),
     worker("pr7-4444444-dash", 0.2),
   ]);

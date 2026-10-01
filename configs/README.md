@@ -21,11 +21,14 @@ files it imports may be TypeScript or JavaScript, and import packages by name as
 `IterateConfigEntrypoint` from `iterate/sdk`, whose docstrings say what its `fetch` and
 `processEvent` are handed; each template's `AGENTS.md` says what its own do.
 
-The platform build embeds every folder here with `@iterate-com/agents` and `@iterate-com/voice`
-pinned to this checkout's own build (apps/os `scripts/published-package-commit.ts`). Any other
+iterate's deploys, previews and test runs give the platform's build every folder here
+(`scripts/os/config-templates.ts`, core/os's `scripts/build.ts` `--template`), with
+`@iterate-com/agents` and `@iterate-com/voice` pinned to this checkout's own build
+(`scripts/os/published-package-commit.ts`). A creation that names no template gets core's minimal
+config instead; the dash and the consent page start a person's project from `default/`. Any other
 template may list a pkg.pr.new dependency at a branch (`…@main`): the seed writes it at the commit
 pkg.pr.new names for it then, because the loader loads a pkg.pr.new package only at a full commit
-(`pinPkgPrNewDependencies` in `packages/iterate/src/pkg-pr-new.ts`). `devDependencies` are copied as
+(`pinPkgPrNewDependencies` in `core/lib/src/pkg-pr-new.ts`). `devDependencies` are copied as
 written.
 
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from
@@ -35,10 +38,10 @@ checks a project's checkout, while the loader links the running platform's SDK (
 from `dependencies` is the platform's). In this repo, `pnpm typecheck:configs` checks every template
 against the workspace packages.
 
-`session.projects.templates()` lists presets: every folder but `default`. `projects.create({
-project, configRepoTemplate })` also accepts custom references such as
+`session.projects.templates()` lists the presets, every folder here. `projects.create({ project,
+configRepoTemplate })` also accepts custom references such as
 `github:owner/repo#main&path:templates/example`. The API resolves the ref to a commit before
-persisting the creation request. Omit it for the default template.
+persisting the creation request. Omit it for core's minimal config.
 
 The build lists each preset under a reference at the repository commit, and a creation naming that
 reference is seeded from the build's copy, with no GitHub request.

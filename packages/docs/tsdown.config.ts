@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 // One neutral ES module per export. `iterate` and `zod` stay imports: a loaded worker binds them to
-// the platform's own modules (apps/os context/module-resolution.ts); yjs and diff are the package's
+// the platform's own modules (core/os context/module-resolution.ts); yjs and diff are the package's
 // npm dependencies, which the loader fetches from esm.sh. node-diff3 is bundled: esm.sh builds it
 // from its `browser` export, an IIFE, whose only export is `default` (no `diff3Merge`).
 export default defineConfig({

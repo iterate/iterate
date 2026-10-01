@@ -22,7 +22,7 @@ import deploy from "./deploy.ts";
 const SCHEMAS = { events, logs, spans, metrics };
 /** A stream's columns, as schemas/*.json holds them and Pipelines reports them. */
 type StreamSchema = (typeof SCHEMAS)[keyof typeof SCHEMAS];
-/** The two OTLP destinations, by the dataset each exports; apps/os's wrangler config names them. */
+/** The two OTLP destinations, by the dataset each exports; core/os's wrangler config names them. */
 const DESTINATIONS = { traces: "telemetry-traces", logs: "telemetry-logs" };
 
 export default async function ensureResources(options: { env: string }) {
