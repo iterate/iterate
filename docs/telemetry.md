@@ -65,21 +65,22 @@ One row per durable event of a project context. Key: `(project_id, path, offset)
 
 ### logs
 
-One row per `console.*` line or uncaught exception of every exporting Worker. Cloudflare's own
-per-request log records are dropped: each repeats its root span, and carries the query string.
-Key: `(span_id, seq)`.
+One row per log record of every exporting Worker: a `console.*` line, an uncaught exception, and
+Cloudflare's own record of each invocation (a fetch, an RPC call, an alarm). Key:
+`(span_id, seq)`.
 
-| column                       | type                  | from                                                                        |
-| ---------------------------- | --------------------- | --------------------------------------------------------------------------- |
-| `version`                    | string                | `cloudflare.script_version.id`                                              |
-| `level`                      | string                | `debug`, `info` (9), `warn` (13), `error` (17: `console.error`, exceptions) |
-| `trace_id`, `span_id`, `seq` | string, string, int32 | the record's ids; `seq` orders lines within a millisecond                   |
-| `event`                      | string                | the body's `event` field, when the body is an object with one               |
-| `body`, `body_bytes`         | string, int32         | a string as written, an object as JSON                                      |
-| `exception`, `stack`         | string                | `exception.type: exception.message`, `exception.stacktrace`                 |
+| column                       | type                  | from                                                                                                             |
+| ---------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `version`                    | string                | `cloudflare.script_version.id`                                                                                   |
+| `level`                      | string                | `debug`, `info` (9), `warn` (13), `error` (17: `console.error`, exceptions)                                      |
+| `trace_id`, `span_id`, `seq` | string, string, int32 | the record's ids; `seq` orders lines within a millisecond                                                        |
+| `event`                      | string                | the body's `event` field, when the body is an object with one; `invocation` for Cloudflare's own record          |
+| `body`, `body_bytes`         | string, int32         | a string as written, an object as JSON; an invocation's message (`GET https://…`) and every attribute it carries |
+| `exception`, `stack`         | string                | `exception.type: exception.message`, `exception.stacktrace`                                                      |
 
 `project_id` and `path` come from the body when it has them; a line without them takes them from
-its span, joined on `span_id`.
+its span, joined on `span_id`. An invocation row is about 1 KB, so its fields answer to the guarded
+JSON functions: `json_get_int(body, 'http.response.status_code')`, `json_get_str(body, 'url.path')`.
 
 ### spans
 
@@ -142,6 +143,11 @@ clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
   queries past a million a month, whatever a query reads, and bills nothing yet; its answers say
   nothing of what a query read, so the page counts each panel's stored points in one more query and
   shows them beside the panel's price.
+- **In Cloudflare's dashboard** — nothing here feeds it: its Custom Dashboards chart Cloudflare's own
+  GraphQL datasets, never Analytics Engine or R2 SQL (for Analytics Engine, Cloudflare names
+  Grafana). What it charts live is Workers Logs, kept 7 days: the Observability page's Query Builder
+  takes a count, a sum or a percentile of any field of a log line, ours included, grouped by any
+  other, within seconds, and a saved query is a link; it has no page of several charts.
 - **History** — R2 SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
   (1.4+) attached to the catalog. R2 SQL reads only the columns a query names, from the files whose
   statistics its filters cannot rule out, and answers with the bytes it scanned: $2.50 per TB, 10
@@ -181,7 +187,9 @@ clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
 
 ## Privacy
 
-Rows keep payloads and log bodies: messages, email bodies, model output. Deleting a project or a
+Rows keep payloads and log bodies: messages, email bodies, model output. An invocation's row in
+`logs` keeps the whole URL, its query included, and the visitor's country, city, network and user
+agent; `spans` drops those. Deleting a project or a
 context does not reach the lake; until a purge job exists, its rows stay. The OTLP secret sits in
 plain text in the destination's config and can only append rows. Setup makes it once; to rotate it,
 delete it from Doppler and run setup again.
@@ -194,6 +202,40 @@ stream, sink and pipeline per table, the Worker's secret, and the two OTLP desti
 schema cannot change and a sink cannot adopt an existing table, so a column change is a new table
 (`logs_v2`) and a new stream, sink and pipeline; delete the old ones once drained (an account allows
 20 of each).
+
+## What it adds, and what it touches
+
+Per Cloudflare account with a lake (the dev/preview account alone today; `telemetryEnvs` has no
+prd):
+
+|                  |                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| R2               | one bucket, `iterate-telemetry`, with its Data Catalog, compaction and snapshot expiration                             |
+| Pipelines        | four streams, four sinks, four pipelines (an account allows 20 of each)                                                |
+| Workers          | one, `telemetry`: no storage, no Durable Object, no route but workers.dev                                              |
+| Observability    | two OTLP destinations, `telemetry-traces` and `telemetry-logs`                                                         |
+| Analytics Engine | one dataset, `iterate_metrics`                                                                                         |
+| tokens           | the catalog token (Data Catalog write, the bucket's objects, R2 SQL read) and the admin app's (Account Analytics Read) |
+| Doppler          | project `telemetry` (the catalog token, the OTLP secret); `admin`'s `APP_CONFIG_METRICS__API_TOKEN`                    |
+| the health job   | two steps an hour: the alert check and the metrics copy                                                                |
+
+A `core/os` deployment takes part only when its `envs.ts` entry names a lake (`telemetry:`): it
+then gets the `EVENTS` and `METRICS` bindings and the two destinations. Without them, as on prd,
+the platform hook returns before it builds a row, `metrics` writes nothing, and what is left is a
+`WORKER_NAME` var, `iterate.project_id` and `iterate.path` on each context's spans, and one number
+kept per fan-out row.
+
+Nothing waits on telemetry and no failure of it reaches a caller: the hook's send is never awaited
+and its rejection is logged, a refused metric point is dropped, and the OTLP export is Cloudflare's
+own, retried by Cloudflare while `apps/telemetry` is down. The cost on a taking-part deployment is
+the send itself: about 350 ms of I/O for each durable event, which keeps its invocation open that
+long.
+
+The code, outside tests: `apps/telemetry` (609 lines: the receiver and the account's setup),
+`scripts/monitors` (415: alerts and the copy), `apps/admin` (264: the page), and in core 152 lines
+of `core/os` (the hook's row, the delivery loop's three metrics, the span attributes, the config's
+bindings) and 46 of `core/lib` (`iterate/metrics`). To take it out of a deployment, drop `telemetry:`
+from its `envs.ts` entry and deploy; the account's resources are deleted by hand.
 
 ## Queries
 

@@ -82,8 +82,10 @@ export const OtlpTraces = z.object({
 /** Where a JSON column is cut: a row over 1 MB fails its stream's whole batch. */
 const JSON_COLUMN_MAX_BYTES = 512 * 1024;
 
-/** One row per `console.*` line and uncaught exception. Cloudflare's own per-request record (no
- *  `name: "log"`, no exception) is dropped: it repeats its root span, query string included. */
+/** One row per log record: a `console.*` line, an uncaught exception, and Cloudflare's own record
+ *  of each invocation (no `name: "log"`, no exception), whose event is `invocation` and whose body
+ *  is everything it says: its message (`GET https://…`, `jsrpc`, an alarm's time) and its
+ *  attributes, the URL and its query, the visitor's whereabouts and user agent among them. */
 export function logRows(payload: z.infer<typeof OtlpLogs>) {
   return payload.resourceLogs.flatMap(({ resource, scopeLogs }) => {
     const { worker, version } = workerOf(resource.attributes);
@@ -93,10 +95,16 @@ export function logRows(payload: z.infer<typeof OtlpLogs>) {
       logRecords.flatMap((record) => {
         const attributes = plainAttributes(record.attributes);
         const exception = exceptionOf(attributes);
-        if (attributes.name !== "log" && !exception) return [];
+        const invocation = attributes.name !== "log" && !exception;
         const fields = plainAttributes(record.body.kvlistValue?.values);
         const value = plain(record.body);
-        const body = capped(typeof value === "string" ? value : JSON.stringify(value));
+        const body = capped(
+          invocation
+            ? JSON.stringify({ message: value, ...attributes })
+            : typeof value === "string"
+              ? value
+              : JSON.stringify(value),
+        );
         const severity = record.severityNumber;
         return [
           {
@@ -110,7 +118,7 @@ export function logRows(payload: z.infer<typeof OtlpLogs>) {
             trace_id: record.traceId,
             span_id: record.spanId,
             seq: number(attributes["cloudflare.invocation.sequence.number"]),
-            event: text(fields.event),
+            event: invocation ? "invocation" : text(fields.event),
             body: body.text,
             body_bytes: body.bytes,
             exception,

@@ -23,6 +23,47 @@ const crash = {
   trace_id: "f48ec96b8d15525c1dbf684f84247360",
 };
 /** The resource of oneLine's line and oneSpan's span. */
+/** The body of an `invocation` row: Cloudflare's record of one GET of the producer, whole. */
+function invocationBody(fetch: {
+  path: string;
+  query: string;
+  status: number;
+  invocation: string;
+  ray: string;
+  seq: number;
+}) {
+  const host = "telemetry-spike-producer.iterate-dev-preview.workers.dev";
+  return JSON.stringify({
+    message: `GET https://${host}${fetch.path}?${fetch.query}`,
+    "cloudflare.execution_model": "stateless",
+    "cloudflare.handler_type": "fetch",
+    "faas.invocation_id": fetch.invocation,
+    "cloudflare.ray_id": fetch.ray,
+    "faas.trigger": "http",
+    "url.full": `https://${host}${fetch.path}?${fetch.query}`,
+    "http.request.method": "GET",
+    "http.request.header.accept": "*/*",
+    "http.request.header.accept-encoding": "gzip, br",
+    "user_agent.original": "curl/8.7.1",
+    "cloudflare.colo": "LHR",
+    "cloudflare.verified_bot_category": "",
+    "cloudflare.asn": 64496,
+    "geo.timezone": "Europe/London",
+    "geo.continent.code": "EU",
+    "geo.country.code": "GB",
+    "geo.locality.name": "London",
+    "geo.locality.region": "England",
+    "server.port": "",
+    "server.address": host,
+    "url.path": fetch.path,
+    "url.query": fetch.query,
+    "url.scheme": "https",
+    "network.protocol.name": "https",
+    "http.response.status_code": fetch.status,
+    "cloudflare.invocation.sequence.number": fetch.seq,
+  });
+}
+
 const resource = {
   attributes: [
     { key: "cloudflare.script_name", value: { stringValue: "telemetry-spike-producer" } },
@@ -47,7 +88,7 @@ test.for([
     expected: [],
   },
   {
-    name: "console lines and exceptions are log rows; Cloudflare's per-request records are dropped",
+    name: "console lines, exceptions and Cloudflare's own record of each invocation are log rows",
     rows: logsOf(logs),
     expected: [
       {
@@ -69,6 +110,23 @@ test.for([
         body_bytes: 23,
         exception: "Error: producer crash crash-16",
         stack: "    at Object.fetch (index.js:80:13)",
+      },
+      {
+        ...crash,
+        time: "2026-09-30T13:24:57.705Z",
+        level: "info",
+        span_id: "946881827bbbdf68",
+        seq: 3,
+        event: "invocation",
+        body: invocationBody({
+          path: "/crash",
+          query: "m=crash-16",
+          status: 500,
+          invocation: "6f0e1b7f37245f2a9334ee564c4d1749",
+          ray: "a4338d04285dc51c",
+          seq: 3,
+        }),
+        body_bytes: 1025,
       },
       {
         ...run2,
@@ -111,6 +169,24 @@ test.for([
         seq: 3,
         body: JSON.stringify({ msg: "producer.warn", marker: "run2-3" }),
         body_bytes: 41,
+      },
+      {
+        ...run2,
+        time: "2026-09-30T13:03:12.273Z",
+        level: "info",
+        trace_id: "3b5c20eecb4bbde12809b1edebca6b35",
+        span_id: "ab0ba7257f893245",
+        seq: 4,
+        event: "invocation",
+        body: invocationBody({
+          path: "/",
+          query: "m=run2-3&throw=0&do=b",
+          status: 200,
+          invocation: "b1542b86ba05bdd638554fdadbf8fa97",
+          ray: "a4336d24da26c028",
+          seq: 4,
+        }),
+        body_bytes: 1043,
       },
       {
         ...run2,
