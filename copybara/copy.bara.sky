@@ -1,0 +1,70 @@
+# THE ONE-WAY COPY OF core/ TO THE PUBLIC iterate/os (tasks/core-public-copy.md): after every
+# production deploy, scripts/ci/copybara.ts copies the commits up to the deployed one. Nothing flows
+# back.
+#
+# The copy keeps this repo's paths, so a path means the same file in both. `copybara/os/` holds the
+# files that exist only at the copy's root (its README, package.json, .gitignore, and the workspace
+# and lockfile `copybara.ts root` generates), moved there verbatim. Copybara only reads a config
+# named copy.bara.sky.
+#
+# Every commit that touches the copy's files becomes one copy commit, ending in a
+# `GitOrigin-RevId: <origin sha>` trailer. A run copies whatever came after the newest trailer, so a
+# missed run is caught up by the next one.
+
+# The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
+# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
+# its own (one mentioned mid-sentence is text). A section with no closing marker is left out. A
+# squash merge's message is the PR's title and body, and HTML comments survive into it, as the
+# loc-report and os-preview sections do.
+def copy_message(ctx):
+    lines = ctx.message.split("\n")
+    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(lines[0]).replace_all(" (iterate/iterate#$1)")
+    sections = []
+    section = None
+    for line in lines[1:]:
+        if line.strip() == "<!-- copybara -->":
+            section = []
+        elif line.strip() == "<!-- /copybara -->" and section != None:
+            if "\n".join(section).strip():
+                sections.append("\n".join(section).strip())
+            section = None
+        elif section != None:
+            section.append(line)
+    ctx.set_message("\n\n".join([title] + sections) + "\n")
+
+core.workflow(
+    name = "os",
+    origin = git.origin(
+        url = "https://github.com/iterate/iterate",
+        # the default ref; scripts/ci/copybara.ts always names the commit to copy up to
+        ref = "main",
+        # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+        partial_fetch = True,
+    ),
+    # What the self-host recipe (core/os/public/setup-prompt.md) installs and builds: core/, the root
+    # tsconfigs its tsconfigs extend, the Node version, the license, and every patch (the copy's
+    # pnpm-workspace.yaml names the ones its packages use; by folder, so a version bump never leaves
+    # the copy's behind). The root package.json, pnpm-workspace.yaml and pnpm-lock.yaml are the copy's
+    # own, in copybara/os/ (scripts/ci/copybara.ts `root`).
+    origin_files = glob([
+        "core/**",
+        "LICENSE",
+        "tsconfig.base.json",
+        "tsconfig.app.json",
+        ".nvmrc",
+        "patches/**",
+        "copybara/os/**",
+    ]),
+    destination = git.destination(
+        url = "https://github.com/iterate/os",
+        push = "main",
+        fetch = "main",
+    ),
+    destination_files = glob(["**"]),
+    mode = "ITERATIVE",
+    authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
+    transformations = [
+        core.move("copybara/os", ""),
+        copy_message,
+    ],
+)

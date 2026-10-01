@@ -4,7 +4,7 @@ A recipe for a coding agent. If you were asked to set someone up with iterate.co
 self-hosted iterate, follow it.
 
 End state: `https://iterate.<subdomain>.workers.dev/mcp` is a working remote MCP server in the user's
-agents. iterate OS (`core/os` in https://github.com/iterate/iterate) is one Worker: sign-in and
+agents. iterate OS (`core/os` in https://github.com/iterate/os) is one Worker: sign-in and
 OAuth, `/mcp` (one tool, `run({ project, script })`, which evaluates `async (itx) => …` against a
 project), and a Durable Object per project.
 
@@ -30,9 +30,10 @@ so say which flow a page is for when you open it.
 ## 1. Build
 
 ```bash
-git clone --depth 1 https://github.com/iterate/iterate   # gitignored
+git clone --depth 1 https://github.com/iterate/os iterate   # gitignored
 cd iterate && pnpm install
-sha=$(git rev-parse HEAD)
+# the commit of iterate's own repo this copy came from, where iterate's templates live
+sha=$(git log -1 --format='%(trailers:key=GitOrigin-RevId,valueonly)')
 CLOUDFLARE_ENV=self-host pnpm --filter os build \
   --template "github:iterate/iterate#$sha&path:configs/default" \
   --template "github:iterate/iterate#$sha&path:configs/heartbeat"
