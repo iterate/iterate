@@ -3,25 +3,20 @@
 //
 //   node scripts/ci/copybara.ts sync --sha <deployed sha>
 //   node scripts/ci/copybara.ts check --sha <commit>
-//   node scripts/ci/copybara.ts root [--check]
+//   node scripts/ci/copybara.ts workspace-files [--check]
 //
-// `sync` copies iterate/iterate's commits up to a deployed one into iterate/os's main, then checks
-// that the copy holds exactly what it should at that commit, and that a fresh clone passes the
-// self-host recipe. Deploy OS runs it after a production deploy. An empty copy (its first run)
-// starts as one snapshot of that commit: its history begins after the commit's parent (Copybara's
-// --force --last-rev), not with every past commit. A run with nothing new to copy is a pass
-// (Copybara's exit code 4). It pushes as the iterate GitHub App, with a token that can only write
-// iterate/os (./iterate-app-token.ts).
+// `sync` (Deploy OS, after a production deploy) copies iterate/iterate's commits up to the deployed
+// one into iterate/os's main, then checks the copy holds exactly that commit's files and that a
+// fresh clone passes the self-host recipe. An empty copy (its first run) starts as one snapshot of
+// that commit. It pushes as the iterate GitHub App, with a token that can only write iterate/os.
 //
-// `check` writes what the copy would hold at a commit into a folder, pushing nothing, and runs the
-// self-host recipe against it: a pull request's check (.depot/workflows/copybara.yml).
+// `check` (a pull request's check, .depot/workflows/copybara.yml) writes what the copy would hold at
+// a commit into a folder, pushing nothing, and runs the self-host recipe against it.
 //
-// `root` writes iterate/os's own pnpm-workspace.yaml and pnpm-lock.yaml into copybara/os/, from
-// this repo's, for the copy's packages alone; `--check` fails when they're stale instead.
+// `workspace-files` writes the copy's pnpm-workspace.yaml and pnpm-lock.yaml (copybara/os/).
 //
-// Copybara runs on $JAVA_HOME's Java, 25 or newer (its jar's class files are version 69; its
-// README's "21" is out of date). A laptop runs every command the same way.
-import { execFileSync, spawnSync } from "node:child_process";
+// Copybara runs on $JAVA_HOME's Java, 25 or newer (its jar's class files are version 69).
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -34,7 +29,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml, parseDocument, YAMLMap } from "yaml";
 import { iterateAppFromPrd, iterateAppToken } from "./iterate-app-token.ts";
@@ -74,7 +69,12 @@ export async function sync(options: {
     // git's credential store, which Copybara hands to every git command it runs
     const credentials = join(work, "git-credentials");
     writeFileSync(credentials, `https://x-access-token:${app.token}@github.com\n`, { mode: 0o600 });
-    const pushing = [
+    const withToken = ["-c", `credential.helper=store --file=${credentials}`];
+    // An empty copy starts as this commit's snapshot: its history begins after the commit's parent.
+    const empty = !(await output("git", [...withToken, "ls-remote", "--heads", COPY_URL, "main"]));
+    const migrate = await copybara([
+      options.sha,
+      ...(empty ? ["--force", "--last-rev", await parentOf(options.sha)] : []),
       "--git-credential-helper-store-file",
       credentials,
       "--nogit-prompt",
@@ -82,30 +82,19 @@ export async function sync(options: {
       COMMITTER.name,
       "--git-committer-email",
       COMMITTER.email,
-    ];
-    // An empty copy starts as this commit's snapshot: its history begins after the commit's parent.
-    const empty = !gitOut(["ls-remote", "--heads", COPY_URL, "main"], credentials).trim();
-    const migrate = copybara([
-      options.sha,
-      ...(empty ? ["--force", "--last-rev", parentOf(options.sha)] : []),
-      ...pushing,
     ]);
     process.stdout.write(migrate.stderr);
     if (migrate.status === 4)
       console.log(`[copybara] ${REPO}: nothing new to copy up to ${options.sha}`);
-    else if (migrate.status !== 0)
-      throw new Error(`Copybara's ${WORKFLOW} exited with ${migrate.status || migrate.signal}`);
+    else if (migrate.status !== 0) throw new Error(`Copybara exited with ${migrate.status}`);
 
-    // What the copy should hold at `sha`: Copybara writes it to a folder, with the same file
-    // selection and transformations as the migration.
-    const copy = fetchCopyHead({ credentials, work });
     const expected = join(work, "expected");
-    writeToFolder(options.sha, expected);
-    checkCopy({ sha: options.sha, expected, copy });
+    await writeToFolder(options.sha, expected);
+    await checkCopy({ sha: options.sha, expected, withToken, work });
 
     const clone = join(work, "clone");
-    gitOut(["clone", "--quiet", "--depth", "1", COPY_URL, clone], credentials);
-    checkSelfHost(clone);
+    await run("git", [...withToken, "clone", "--quiet", "--depth", "1", COPY_URL, clone]);
+    await checkSelfHost(clone);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -120,60 +109,93 @@ export async function check(options: {
   const work = mkdtempSync(join(tmpdir(), "copybara-check-"));
   try {
     const folder = join(work, REPO);
-    writeToFolder(options.sha, folder);
+    await writeToFolder(options.sha, folder);
     // the folder as a fresh clone has it: every file committed, so the recipe's `git status` check
     // means what it does there
+    const commit = ["-c", "user.name=copybara", "-c", "user.email=copybara@localhost"];
     for (const args of [
       ["init", "--quiet"],
       ["add", "--all"],
-      ["commit", "--quiet", "-m", "copy"],
+      [...commit, "commit", "--quiet", "-m", "copy"],
     ])
-      execFileSync(
-        "git",
-        ["-c", "user.name=copybara", "-c", "user.email=copybara@localhost", ...args],
-        {
-          cwd: folder,
-        },
-      );
-    checkSelfHost(folder);
+      await run("git", args, { cwd: folder });
+    await checkSelfHost(folder);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
-/** Copybara's `migrate` of the os workflow with `args`. */
-function copybara(args: string[]) {
+/** Copybara's `migrate` of the os workflow with `args`: its exit status (4: nothing to migrate) and
+ *  what it printed. */
+async function copybara(args: string[]) {
   const javaHome = process.env.JAVA_HOME;
   if (!javaHome) throw new Error("JAVA_HOME is unset: Copybara needs Java 25 or newer");
-  return spawnSync(
-    join(javaHome, "bin", "java"),
-    ["-jar", copybaraJar(), "migrate", CONFIG, WORKFLOW, ...args],
-    { encoding: "utf8" },
-  );
+  const jar = await copybaraJar();
+  return new Promise<{ status: number | null; stderr: string }>((resolvePromise, reject) => {
+    const child = spawn(join(javaHome, "bin", "java"), [
+      "-jar",
+      jar,
+      "migrate",
+      CONFIG,
+      WORKFLOW,
+      ...args,
+    ]);
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.once("error", reject);
+    child.once("close", (status) => resolvePromise({ status, stderr }));
+  });
 }
 
 /** What the copy holds at `sha`, as Copybara writes it: the same file selection and
  *  transformations as a migration. */
-function writeToFolder(sha: string, folder: string) {
-  const run = copybara([sha, "--to-folder", "--folder-dir", folder, "--squash"]);
-  if (run.status === 0) return;
-  process.stdout.write(run.stderr);
-  throw new Error(`Copybara's ${WORKFLOW} --to-folder exited with ${run.status || run.signal}`);
+async function writeToFolder(sha: string, folder: string) {
+  const written = await copybara([sha, "--to-folder", "--folder-dir", folder, "--squash"]);
+  if (written.status === 0) return;
+  process.stdout.write(written.stderr);
+  throw new Error(`Copybara --to-folder exited with ${written.status}`);
 }
 
-/** A git command's output, with the App's token for github.com when `credentials` is given. */
-function gitOut(args: string[], credentials?: string) {
-  return execFileSync(
-    "git",
-    [...(credentials ? ["-c", `credential.helper=store --file=${credentials}`] : []), ...args],
-    { encoding: "utf8" },
-  );
+/** `command args`, its output streamed to ours (an install, a build), throwing unless it exits 0. */
+function run(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: Record<string, string> } = {},
+) {
+  console.log(`[copybara] ${[command, ...args].join(" ")}`);
+  return new Promise<void>((resolvePromise, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: "inherit",
+      env: { ...process.env, ...options.env },
+    });
+    child.once("error", reject);
+    child.once("close", (status) =>
+      status === 0
+        ? resolvePromise()
+        : reject(new Error(`${command} ${args[0]} exited with ${status}`)),
+    );
+  });
+}
+
+/** `command args`'s output, trimmed. */
+async function output(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+) {
+  const { stdout } = await promisify(execFile)(command, args, {
+    ...options,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return stdout.trim();
 }
 
 /** `sha`'s first parent, from this checkout (a CI checkout is one commit deep: fetched if need be). */
-function parentOf(sha: string) {
-  execFileSync("git", ["fetch", "--quiet", "--depth=2", "origin", sha], { cwd: REPO_ROOT });
-  return execFileSync("git", ["rev-parse", `${sha}^`], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+async function parentOf(sha: string) {
+  await run("git", ["fetch", "--quiet", "--depth=2", "origin", sha], { cwd: REPO_ROOT });
+  return output("git", ["rev-parse", `${sha}^`], { cwd: REPO_ROOT });
 }
 
 /**
@@ -182,26 +204,24 @@ function parentOf(sha: string) {
  * copy's lockfile), the self-host build, a dry-run deploy, and the SDK imports its later steps run.
  * After all that, `git status` in the checkout must be clean.
  */
-function checkSelfHost(checkout: string) {
-  const run = (command: string, args: string[], cwd: string, env: Record<string, string> = {}) => {
-    console.log(`[copybara] ${REPO}: ${[command, ...args].join(" ")}`);
-    execFileSync(command, args, { cwd, stdio: "inherit", env: { ...process.env, ...env } });
-  };
-  run("pnpm", ["install", "--frozen-lockfile"], checkout);
-  run("pnpm", ["--filter", "os", "build"], checkout, { CLOUDFLARE_ENV: "self-host" });
+async function checkSelfHost(checkout: string) {
+  await run("pnpm", ["install", "--frozen-lockfile"], { cwd: checkout });
+  await run("pnpm", ["--filter", "os", "build"], {
+    cwd: checkout,
+    env: { CLOUDFLARE_ENV: "self-host" },
+  });
   const os = join(checkout, "core/os");
-  run(
+  await run(
     "pnpm",
     ["exec", "wrangler", "deploy", "--config", "dist/server/wrangler.json", "--dry-run"],
-    os,
+    { cwd: os },
   );
-  run("node", ["--eval", 'Promise.all([import("iterate/node"), import("capnweb")])'], os);
-  // and leaves the checkout clean: everything it made is ignored, and nothing tracked changed
-  const status = execFileSync("git", ["status", "--porcelain"], {
-    cwd: checkout,
-    encoding: "utf8",
+  await run("node", ["--eval", 'Promise.all([import("iterate/node"), import("capnweb")])'], {
+    cwd: os,
   });
-  if (status.trim())
+  // and leaves the checkout clean: everything it made is ignored, and nothing tracked changed
+  const status = await output("git", ["status", "--porcelain"], { cwd: checkout });
+  if (status)
     throw new Error(
       `the recipe left ${REPO}'s checkout dirty (copybara/os/.gitignore, or an install that rewrites a tracked file):\n${status.split("\n").slice(0, 20).join("\n")}`,
     );
@@ -211,36 +231,23 @@ function checkSelfHost(checkout: string) {
 /**
  * The copy is in sync when its head's tree hash equals the hash of the folder Copybara wrote for
  * `sha`. A git tree hash is a hash of the content alone, so equal hashes mean every file is the
- * same, and a file added by hand shows up too. Only the copy's commits and trees are fetched.
+ * same, and a file added by hand shows up too. Only the copy's head commit and its trees are
+ * fetched, and its `GitOrigin-RevId` trailer must name the iterate/iterate commit it came from.
  */
-function checkCopy(input: {
+async function checkCopy(input: {
   sha: string;
   expected: string;
-  copy: ReturnType<typeof fetchCopyHead>;
+  withToken: string[];
+  work: string;
 }) {
-  const { git, head, tree } = input.copy;
-  git("--work-tree", input.expected, "add", "--all", ".");
-  const expectedTree = git("write-tree");
-  if (tree !== expectedTree)
-    throw new Error(
-      `${COPY_URL}/commit/${head} is not what ${input.sha} should copy: ${git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
-    );
-  console.log(`[copybara] in sync: ${COPY_URL}/commit/${head} is ${input.sha}'s (tree ${tree})`);
-}
-
-/** The copy's main as it is now: its head and its tree. Only the head's commit and trees are
- *  fetched, and its `GitOrigin-RevId` trailer must name the iterate/iterate commit it came from. */
-function fetchCopyHead(input: { credentials: string; work: string }) {
   const gitDir = join(input.work, `${REPO}.git`);
   const git = (...args: string[]) =>
-    execFileSync("git", ["--git-dir", gitDir, ...args], {
-      encoding: "utf8",
+    output("git", ["--git-dir", gitDir, ...args], {
       env: { ...process.env, GIT_INDEX_FILE: join(input.work, `${REPO}.index`) },
-    }).trim();
-  execFileSync("git", ["init", "--quiet", "--bare", gitDir]);
-  git(
-    "-c",
-    `credential.helper=store --file=${input.credentials}`,
+    });
+  await run("git", ["init", "--quiet", "--bare", gitDir]);
+  await git(
+    ...input.withToken,
     "fetch",
     "--quiet",
     "--no-tags",
@@ -249,7 +256,7 @@ function fetchCopyHead(input: { credentials: string; work: string }) {
     COPY_URL,
     "main",
   );
-  const copiedCommit = git(
+  const copiedCommit = await git(
     "log",
     "-1",
     "--format=%(trailers:key=GitOrigin-RevId,valueonly)",
@@ -257,17 +264,25 @@ function fetchCopyHead(input: { credentials: string; work: string }) {
   );
   if (!/^[0-9a-f]{40}$/.test(copiedCommit))
     throw new Error(`${COPY_URL}'s main names no GitOrigin-RevId: ${JSON.stringify(copiedCommit)}`);
-  return { git, head: git("rev-parse", "FETCH_HEAD"), tree: git("rev-parse", "FETCH_HEAD^{tree}") };
+  const head = await git("rev-parse", "FETCH_HEAD");
+  const tree = await git("rev-parse", "FETCH_HEAD^{tree}");
+  await git("--work-tree", input.expected, "add", "--all", ".");
+  const expectedTree = await git("write-tree");
+  if (tree !== expectedTree)
+    throw new Error(
+      `${COPY_URL}/commit/${head} is not what ${input.sha} should copy: ${await git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
+    );
+  console.log(`[copybara] in sync: ${COPY_URL}/commit/${head} is ${input.sha}'s (tree ${tree})`);
 }
 
 /** The pinned Copybara release's jar, downloaded once per machine and checked against its SHA-256. */
-function copybaraJar() {
+async function copybaraJar() {
   const dir = join(tmpdir(), "copybara-jar");
   const jar = join(dir, `copybara-${COPYBARA.version}.jar`);
   const hash = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
   if (existsSync(jar) && hash(jar) === COPYBARA.sha256) return jar;
   mkdirSync(dir, { recursive: true });
-  execFileSync("curl", [
+  await run("curl", [
     "-fsSL",
     "--retry",
     "3",
@@ -280,26 +295,26 @@ function copybaraJar() {
   return jar;
 }
 
-/** iterate/os's workspace packages: what copy.bara.sky's `os` workflow copies of this repo's. */
+/** The copy's workspace packages. */
 const OS_PACKAGES = ["core/os", "core/lib"];
 const OS_WORKSPACE_HEADER =
   "# iterate/os's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for\n" +
   "# these packages alone, with the same settings and the catalog trimmed to what they use.\n";
 
 /**
- * iterate/os's own pnpm-workspace.yaml and pnpm-lock.yaml (copybara/os/, which Copybara moves to
- * the copy's root). pnpm makes them, in a scratch folder holding the copy's root package.json
- * (copybara/os/package.json, written by hand), this repo's lockfile and workspace file with the
- * copy's packages, those packages' manifests and the patches: `pnpm install --lockfile-only` drops
- * every other package's entries and the catalog entries nothing uses, resolving nothing new.
- * Then every dependency must be one this repo already resolves, at the same version.
+ * Generates the copy's pnpm-workspace.yaml and pnpm-lock.yaml into copybara/os/: this repo's two,
+ * cut down to core/os and core/lib. With `check`, fails if the committed ones are out of date.
+ *
+ * How: pnpm makes them in a scratch folder (`pnpm install --lockfile-only` with only the copy's
+ * packages listed drops every other package, and the catalog entries nothing uses), then
+ * checkSubset proves the copy resolves nothing this repo doesn't.
  */
-export async function root(options: {
-  /** Fail when copybara/os/'s files are stale, instead of writing them. */
+export async function workspaceFiles(options: {
+  /** Fail when copybara/os/'s files are out of date, instead of writing them. */
   check?: boolean;
 }) {
   const out = join(REPO_ROOT, "copybara/os");
-  const scratch = mkdtempSync(join(tmpdir(), "copybara-root-"));
+  const scratch = mkdtempSync(join(tmpdir(), "copybara-workspace-"));
   try {
     cpSync(join(out, "package.json"), join(scratch, "package.json"));
     cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(scratch, "pnpm-lock.yaml"));
@@ -323,7 +338,7 @@ export async function root(options: {
     // where a published version never changes, so every machine writes the same lockfile. A
     // laptop's cache once gave crossws@0.4.4 another peer range than CI's, and the check went stale.
     const lockfileOnly = (extra: string[]) =>
-      execFileSync(
+      run(
         "pnpm",
         [
           "install",
@@ -332,14 +347,14 @@ export async function root(options: {
           `--config.cache-dir=${join(scratch, ".pnpm-cache")}`,
           ...extra,
         ],
-        { cwd: scratch, stdio: ["ignore", "ignore", "inherit"] },
+        { cwd: scratch },
       );
     // pnpm refuses a patch for a package nothing installs, and an override naming a catalog entry
     // the catalog no longer has (`cleanupUnusedCatalogs` drops what the copy doesn't use), and this
     // repo patches and overrides packages the copy may not use (@cloudflare/vitest-plugin, once only
     // test/ used it; @codemirror/state, once only packages/ui): resolve once allowing them, then keep
     // the patches and overrides whose package the copy's lockfile resolves.
-    lockfileOnly(["--config.allow-unused-patches=true"]);
+    await lockfileOnly(["--config.allow-unused-patches=true"]);
     const resolved = readFileSync(join(scratch, "pnpm-lock.yaml"), "utf8");
     const scratchWorkspace = join(scratch, "pnpm-workspace.yaml");
     const document = parseDocument(readFileSync(scratchWorkspace, "utf8"));
@@ -357,7 +372,7 @@ export async function root(options: {
     }
     writeFileSync(scratchWorkspace, document.toString());
     cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(scratch, "pnpm-lock.yaml"));
-    lockfileOnly([]);
+    await lockfileOnly([]);
     const files = {
       "pnpm-workspace.yaml":
         OS_WORKSPACE_HEADER + readFileSync(join(scratch, "pnpm-workspace.yaml"), "utf8"),
@@ -373,22 +388,17 @@ export async function root(options: {
       // what changed, as a diff of the committed file against the one generated here
       for (const [name, content] of stale) {
         writeFileSync(join(scratch, `generated-${name}`), content);
-        const diff = spawnSync(
-          "git",
-          [
-            "diff",
-            "--no-index",
-            "--stat",
-            "--patch",
-            join(out, name),
-            join(scratch, `generated-${name}`),
-          ],
-          { encoding: "utf8" },
-        );
-        console.log(diff.stdout.split("\n").slice(0, 120).join("\n"));
+        await run("git", [
+          "--no-pager",
+          "diff",
+          "--no-index",
+          "--stat",
+          join(out, name),
+          join(scratch, `generated-${name}`),
+        ]).catch(() => {});
       }
       throw new Error(
-        `copybara/os/{${stale.map(([name]) => name).join(",")}} are stale: run \`node scripts/ci/copybara.ts root\` and commit them`,
+        `copybara/os/{${stale.map(([name]) => name).join(",")}} are out of date: run \`node scripts/ci/copybara.ts workspace-files\` and commit them`,
       );
     }
     for (const [name, content] of stale) writeFileSync(join(out, name), content);
@@ -467,4 +477,4 @@ function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": s
     );
 }
 
-void createCli({ ...import.meta, name: "copybara" }).run();
+void createCli(import.meta).run();

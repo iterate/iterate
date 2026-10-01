@@ -4,7 +4,7 @@
 #
 # The copy keeps this repo's paths, so a path means the same file in both. `copybara/os/` holds the
 # files that exist only at the copy's root (its README, package.json, .gitignore, and the workspace
-# and lockfile `copybara.ts root` generates), moved there verbatim. Copybara only reads a config
+# and lockfile `copybara.ts workspace-files` generates), moved there verbatim. Copybara only reads a config
 # named copy.bara.sky.
 #
 # Every commit that touches the copy's files becomes one copy commit, ending in a
@@ -42,16 +42,18 @@ core.workflow(
         partial_fetch = True,
     ),
     # What the self-host recipe (core/os/public/setup-prompt.md) installs and builds: core/, the root
-    # tsconfigs its tsconfigs extend, the Node version, the license, and every patch (the copy's
-    # pnpm-workspace.yaml names the ones its packages use; by folder, so a version bump never leaves
-    # the copy's behind). The root package.json, pnpm-workspace.yaml and pnpm-lock.yaml are the copy's
-    # own, in copybara/os/ (scripts/ci/copybara.ts `root`).
+    # tsconfigs its tsconfigs extend, the Node version and the license. The root package.json,
+    # pnpm-workspace.yaml and pnpm-lock.yaml are the copy's own, in copybara/os/
+    # (scripts/ci/copybara.ts workspace-files).
     origin_files = glob([
         "core/**",
         "LICENSE",
         "tsconfig.base.json",
         "tsconfig.app.json",
         ".nvmrc",
+        # The copy's pnpm-workspace.yaml names the patches its packages need (today zod's), and pnpm
+        # refuses to install when a named patch file is missing. The whole folder, so a patch for
+        # a new version is copied the day the workspace names it.
         "patches/**",
         "copybara/os/**",
     ]),

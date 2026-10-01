@@ -121,26 +121,17 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Setup
-        uses: ./.depot/actions/setup
+      - uses: actions/checkout@v4
+      - uses: ./.depot/actions/setup
         with:
           # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      # iterate/os's own workspace file and lockfile (copybara/os/) match this commit's manifests
-      - name: Check the copy's generated root files
-        run: node scripts/ci/copybara.ts root --check
-      # Copybara's jar is built for Java 25 (class file version 69), which Depot's stock image lacks:
-      # Temurin's, which also sets JAVA_HOME
-      - name: Setup Java
-        uses: actions/setup-java@v5
+      - name: Check the copy's workspace files are up to date
+        run: node scripts/ci/copybara.ts workspace-files --check
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
-      # The script reads the iterate App's key from Doppler os/prd, like the deploy.
       - name: Copy up to the deployed commit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

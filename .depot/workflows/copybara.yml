@@ -33,19 +33,11 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
-      # THE RUN'S OWN COMMIT (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Setup
-        uses: ./.depot/actions/setup
-      # the copy's own workspace file and lockfile (copybara/os/) match this commit's manifests
-      - name: Check the copy's generated root files
-        run: node scripts/ci/copybara.ts root --check
-      # Copybara's jar is built for Java 25 (class file version 69): Temurin's, which sets JAVA_HOME
-      - name: Setup Java
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v4
+      - uses: ./.depot/actions/setup
+      - name: Check the copy's workspace files are up to date
+        run: node scripts/ci/copybara.ts workspace-files --check
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
