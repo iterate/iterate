@@ -47,7 +47,7 @@ test("a file finds nothing an earlier one stored: an evicted context, a loaded o
 
 // THE GAP THE POOL'S DELETE FILLS (empty-runtime.ts step 3). The day `reset()` alone empties an
 // evicted object, this row turns red, and the pool's delete (vitest.config.ts `TEST_STORAGE`) and
-// patches/@cloudflare__vitest-plugin@1.3.2.patch can go.
+// patches/@cloudflare__vitest-plugin@1.3.5.patch can go.
 createFailing(test, /an object evicted before reset\(\) should be empty after it/)(
   "reset() empties the storage of a context evicted before it",
   async () => {

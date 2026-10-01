@@ -13,10 +13,10 @@ index 130b334ba5b00fa61a525a54f0c09be1520afc25..fabf86f76e0fa90311a24688b9a3f6d6
  };
  type WorkersPoolOptionsWithDefines = WorkersPoolOptions & {
 diff --git a/dist/pool/index.mjs b/dist/pool/index.mjs
-index 5b0664afd8b2159a4042d8c1648f605782600619..c4c5c43fa8c2584bee2178563366bb922b7d77d0 100644
+index c9c238ffcf80884674a864d8b0cac26ef8b58e2c..0b16dc01fc59a320a6aa29be1a1441fdb10cb19f 100644
 --- a/dist/pool/index.mjs
 +++ b/dist/pool/index.mjs
-@@ -64243,6 +64243,12 @@ function normalizeNewConfigOption(option) {
+@@ -64384,6 +64384,12 @@ function normalizeNewConfigOption(option) {
  async function parseCustomPoolOptions(rootPath, value, mode) {
  	const options = WorkersPoolOptionsSchema.parse(value);
  	options.miniflare ??= {};
@@ -29,7 +29,7 @@ index 5b0664afd8b2159a4042d8c1648f605782600619..c4c5c43fa8c2584bee2178563366bb92
  	const miniflareModuleRules = options.miniflare.modulesRules;
  	const errorRef = {};
  	const workers = options.miniflare?.workers;
-@@ -64329,6 +64335,7 @@ async function parseCustomPoolOptions(rootPath, value, mode) {
+@@ -64470,6 +64476,7 @@ async function parseCustomPoolOptions(rootPath, value, mode) {
  		options.miniflare.assets.routerConfig ??= {};
  		options.miniflare.assets.routerConfig.has_user_worker = Boolean(options.main);
  	}
@@ -37,7 +37,7 @@ index 5b0664afd8b2159a4042d8c1648f605782600619..c4c5c43fa8c2584bee2178563366bb92
  	return options;
  }
  async function parseProjectOptions(project, poolOptions) {
-@@ -64957,6 +64964,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
+@@ -65098,6 +65105,7 @@ async function buildProjectMiniflareOptions(ctx, project, customOptions, main) {
  	}
  	return convertV4MiniflareOptions({
  		...SHARED_MINIFLARE_OPTIONS,
