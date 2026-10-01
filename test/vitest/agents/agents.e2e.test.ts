@@ -339,8 +339,10 @@ test("a script that returns nothing ends the turn: no result item, no further re
 test("words sent while a script runs are answered at once: the feed shows the reply above the still-running script, which settles into one clean activity", async () => {
   const itx = await openAgentItx(freshCtx("agent-reply-mid-script"));
   const support = itx.cd("/agents/support");
+  const go = Promise.withResolvers<void>();
+  await support.provide("itx.go", () => go.promise);
   const ai = new FakeAi([
-    '<codemode status="Waiting for go">\nwhile ((await itx.kv.get("go")) !== "yes") await new Promise((resolve) => setTimeout(resolve, 200));\n</codemode>',
+    '<codemode status="Waiting for go">\nawait itx.go();\n</codemode>',
     "Still waiting for go.",
   ]);
   await support.provide("itx.ai", ai);
@@ -381,7 +383,7 @@ test("words sent while a script runs are answered at once: the feed shows the re
       { kind: "llm", status: "done", outcome: "completed" },
     ]);
   } finally {
-    await itx.kv.put("go", "yes");
+    go.resolve();
   }
   const settled = await untilValue(
     "the script's settlement",
