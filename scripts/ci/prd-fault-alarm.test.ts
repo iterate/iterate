@@ -448,9 +448,9 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
 
 test.for([
   {
-    name: "a request line's path",
-    message: "GET https://garple.com/api/projects?x=1",
-    label: "GET https://garple.com/…",
+    name: "a scanner's paths on one host",
+    message: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1",
+    label: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
   },
   {
     name: "a workerd reference",
@@ -479,98 +479,23 @@ test.for([
   ]);
 });
 
-test("a failed invocation's request line is one incident per method and host, not per path, and one for all of iterate.com's made-up subdomains", () => {
+test("a failed invocation's request line is one incident per method and host, not per path", () => {
   expect([
     ...incidentsOf({
       ...quiet,
       errors: [
         ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/credentials.csv", 10],
-        ["GET https://build.iterate.com/api/config", 3],
-        ["GET https://garple.com/", 1],
-        ["GET https://garple.com/d/ferovo.com", 1],
+        ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1", 1],
         ["POST https://k.iterate.com/?rest_route=%2Fbatch%2Fv1", 1],
         ["call timed out", 2],
       ],
-    }),
+    }).keys(),
   ]).toEqual([
-    [
-      "errors: GET https://(subdomain).iterate.com/…",
-      expect.objectContaining({ label: "GET https://(subdomain).iterate.com/…", count: 13 }),
-    ],
-    ["errors: GET https://garple.com/…", expect.objectContaining({ count: 2 })],
-    ["errors: POST https://k.iterate.com/…", expect.objectContaining({ count: 1 })],
-    ["errors: call timed out", expect.objectContaining({ count: 2 })],
+    "errors: GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
+    "errors: POST https://k.iterate.com/…",
+    "errors: call timed out",
   ]);
 });
-
-test("iterate.com's made-up subdomains are one incident listing its hosts; the apex, www and the first-party hosts keep their own", () => {
-  // 2026-09-30 21:05–21:35Z: the iterate project's site answered 500 on every name a scanner tried.
-  expect(
-    triageIncidents(
-      {
-        ...quiet,
-        serverErrors: [
-          ["https://build.iterate.com/v1/graphql", 6],
-          ["https://backend.iterate.com/", 5],
-          ["https://inference.iterate.com:8443/", 4],
-          ["https://cf-tunnel-plugin-os2-jonas--dev2.iterate.com/", 3],
-          ["https://art.iterate.com/", 2],
-          ["https://andy.iterate.com/api/session/properties", 2],
-          ["https://iterate.com/", 5],
-          ["https://www.iterate.com/", 1],
-          ["https://dash.iterate.com/", 1],
-        ],
-      },
-      window,
-      null,
-      false,
-    ).page?.text.split("\n"),
-  ).toEqual([
-    `🚨 prd: 29 visitor 5xx ${mentions}`,
-    "Impact: since 07:30 UTC",
-    "• visitor 5xx: iterate.com subdomains 22 on build.iterate.com 6, backend.iterate.com 5, inference.iterate.com:8443 4, cf-tunnel-plugin-os2-jonas--dev2.iterate.com 3, art.iterate.com 2 +1 · last 07:30 UTC",
-    "• visitor 5xx: iterate.com 5 · last 07:30 UTC",
-    "• visitor 5xx: www.iterate.com 1 · last 07:30 UTC",
-    "• visitor 5xx: dash.iterate.com 1 · last 07:30 UTC",
-    doLine,
-  ]);
-});
-
-test.for([
-  { path: "/.env", scanner: true },
-  { path: "/.env.live", scanner: true },
-  { path: "/agent/.env", scanner: true },
-  { path: "//.env", scanner: true },
-  { path: "/.git/config", scanner: true },
-  { path: "/wp-login.php", scanner: true },
-  { path: "/wp-content/plugins/api_keys.json", scanner: true },
-  { path: "/index.php?p=", scanner: true },
-  { path: "/cae2.3.php", scanner: true },
-  { path: "/config.php.bak", scanner: true },
-  { path: "/wp-config.php~", scanner: true },
-  { path: "/actuator/configprops", scanner: true },
-  { path: "/cgi-bin/luci", scanner: true },
-  { path: "/_profiler/phpinfo", scanner: true },
-  { path: "/telescope/requests", scanner: true },
-  { path: "/backup.sql", scanner: true },
-  { path: "/web.config", scanner: true },
-  { path: "/", scanner: false },
-  { path: "/.well-known/oauth-authorization-server", scanner: false },
-  { path: "/api/env", scanner: false },
-  { path: "/environment", scanner: false },
-  { path: "/v1/graphql", scanner: false },
-  { path: "/docs/php-setup", scanner: false },
-  { path: "/_iterate/auth/refresh", scanner: false },
-])(
-  "a 5xx on $path counts for nothing when only a scanner asks for it: $scanner",
-  ({ path, scanner }) => {
-    expect(
-      incidentsOf({ ...quiet, serverErrors: [[`https://garple.com${path}`, 1]] }),
-    ).toMatchObject({
-      size: scanner ? 0 : 1,
-    });
-  },
-);
 
 // ── which runs post ──
 
@@ -1419,7 +1344,7 @@ test.for([
       ...rpcStubOfflineRequest("offline-7").slice(1),
       ...failedDocsRequest(),
     ],
-    page: ["• visitor 5xx: iterate.com subdomains 1 on docs.iterate.com 1 · last 07:30 UTC"],
+    page: ["• visitor 5xx: docs.iterate.com 1 · last 07:30 UTC"],
     most: 15,
   },
   {
