@@ -1,11 +1,13 @@
 ---
-status: ready
 size: small
 ---
 
 # npm: alias dependencies in the module loader
 
-**Status:** spec only. Implementation follows in the next commits.
+**Status:** done.
+
+- Done: `npm:` aliases, aliases of platform packages, pkg.pr.new URL aliases, malformed aliases refused, lock prefix bumped, unit and e2e rows.
+- Missing: nothing. `pinPkgPrNewVersion` for aliased URLs is out of scope (below).
 
 A project's package.json can list an npm alias, and config code imports it by the listed name:
 
@@ -38,10 +40,16 @@ Assumptions, made AFK-style; flip any of them in review.
 
 ## Checklist
 
-- [ ] `npm:<package>@<version>` loads `<package>` from esm.sh under the listed name, subpaths too
-- [ ] esm.sh is never asked for the listed name of an alias
-- [ ] an alias of a platform package imports its own subpaths at the aliased version
-- [ ] a pkg.pr.new URL of another package loads as an alias; a moving ref names the right pin
-- [ ] malformed aliases refused by name
-- [ ] lock prefix bumped
-- [ ] an e2e row: a deployed loader runs an aliased platform package (`zod3` → `npm:zod@3`) beside the platform's zod
+- [x] `npm:<package>@<version>` loads `<package>` from esm.sh under the listed name, subpaths too _`esmPackageBase` in core/os/src/context/module-resolution.ts_
+- [x] esm.sh is never asked for the listed name of an alias _the `react` → `@preact/compat` row asserts the exact fetch list_
+- [x] an alias of a platform package imports its own subpaths at the aliased version _`npmSelfImportOf`, next to `prSelfImportOf`_
+- [x] a pkg.pr.new URL of another package loads as an alias; a moving ref names the right pin _`pkgPrNewBuildOf` in core/lib/src/pkg-pr-new.ts_
+- [x] malformed aliases refused by name _one table row each_
+- [x] lock prefix bumped _`module-lock-3`_
+- [x] an e2e row: a deployed loader runs an aliased platform package (`zod3` → `npm:zod@3`) beside the platform's zod _test/vitest/os/npm-packages.e2e.test.ts_
+
+## Implementation log
+
+- Live esm.sh (2026-10-01): with `iterate` in `external`, `iterate@0.4.0/stream/processor` imports `iterate/lib` bare, and `zod@3.25.76` imports `zod/v3/external` and `zod/v4/core`. Without it in `external` they are paths. The `/pr/` route spells them `iterate/iterate/iterate/…`, which `prSelfImportOf` already handles.
+- Rewriting the bare self-import at the importer's version was chosen over dropping the alias target from `external` for its own requests. It needs no per-package query, and it also covers an alias of a platform package nested inside another library.
+- Checked by running `resolveModules` with real `fetch` and importing the resolved graph in Node for `zod3`, `iterate-2026-10-01`, `react` → `@preact/compat`, and a pkg.pr.new alias of `iterate`.
