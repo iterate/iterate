@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -9,11 +9,12 @@ UI PR 2 (UI PR 1 was `tasks/complete/2026-09-30-os-owns-ui.md`). An app in anoth
 our rendered components with `npx shadcn add iterate/packages/<item>` and keeps its own copy. Apps in this
 repo keep importing `@iterate-com/ui`.
 
-Status: implemented, waiting on CI and review.
+Status: done. Marked ready for review on 2026-10-01.
 
 - Done: packages/ui laid out like an app (vendored shadcn in `components/ui/`, `#/` imports between
   items), 18 items in `registry.json` served as a shadcn GitHub registry, its checks, and docs.
-- Left: CI on the PR.
+- Left: nothing in this PR. After the first deploy, `npx shadcn@latest list iterate/packages`
+  confirms the public GitHub registry.
 
 ## Context
 
