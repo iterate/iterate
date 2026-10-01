@@ -652,8 +652,8 @@ test("a median that hovers around its line pages once and resolves once", async 
   ]);
 });
 
-// PR time to green pages nothing (./health.ts ROW_ONLY_SIGNALS): its row is amber over a line itself,
-// where the page waited for 10% past it.
+// PR time to green pages nothing (./health.ts ROW_ONLY_SIGNALS): its row is amber as soon as a median
+// is over its line, without the 10% margin a page needs.
 test.for([
   {
     p50: 169,

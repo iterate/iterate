@@ -370,7 +370,7 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
   // #error-pulse: a dashboard a day, whose DO cost row each run rewrote. In its thread, 3 pages and
   // 2 escalations with both mentions, the first reply at $50/h sent to the channel too (prd's
   // pages, ~$5/h at their peak, were not), and nothing else: each resolution edited its page, whose
-  // first line now starts "✅ resolved:" and whose second says why.
+  // first line starts "✅ resolved:" and whose second says why.
   const [sep21, sep22] = slack.channel("#error-pulse");
   const thread = (dashboard: FakeMessage | undefined) =>
     dashboard!.replies.map((message) => ({

@@ -381,7 +381,7 @@ test("a new incident the same UTC day joins that day's page by an edit; one that
     first.next,
   );
   const burst = triageAt("08:00", { ...quiet, errors: [["boom", 12]] }, lone.next);
-  // garple.com's 5xx, minor until now, comes in a burst: news to the channel
+  // garple.com's 5xx, a lone one at 07:45, comes in a burst: a reply in the thread
   const garpleBurst = triageAt(
     "08:15",
     { ...quiet, serverErrors: [["https://garple.com/", 12]] },

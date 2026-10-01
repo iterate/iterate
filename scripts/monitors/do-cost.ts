@@ -47,8 +47,8 @@ const OPEN_PAGE_HOURS = 48;
 /** How far back a new page looks for its account's older open pages, which it resolves as expired. */
 const EXPIRED_PAGE_HOURS = 30 * 24;
 /** The rate whose first crossing, by a page or a reply, is sent to the channel too: spend that fast
- *  is as urgent as prd being down. dev/preview's 5× page tier; the 09-21 os-next runaway peaked at
- *  $87/h. Dollars, not a multiple: prd's page tier is $0.06/h, so its 5× is $0.28/h. */
+ *  is as urgent as prd being down. dev/preview's 5× page tier. Dollars, not a multiple: prd's page
+ *  tier is $0.06/h, so its 5× is $0.28/h. */
 const CHANNEL_USD_PER_HOUR = 50;
 /** Multiples of the page tier whose first crossing is a reply in today's dashboard thread. */
 const ESCALATIONS = [2, 5];
