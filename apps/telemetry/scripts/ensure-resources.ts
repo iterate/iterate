@@ -118,12 +118,12 @@ export default async function ensureResources(options: { env: string }) {
     found[table] = stream.id;
     // A sink is taken by its name: the table it writes and the token it writes with are not
     // compared with this account's. Cloudflare cannot change a sink
-    // (https://developers.cloudflare.com/pipelines/sinks/manage-sinks/#limitations), so a catalog
+    // (https://developers.cloudflare.com/basin-pipelines/sinks/manage-sinks/#limitations), so a catalog
     // token minted anew reaches only the sinks made after it, and the others write with the old
     // one for as long as Cloudflare honours it. Moving a table's sink to the new token takes more
     // than deleting its pipeline and sink and running this again: a sink cannot be made for a
     // table that exists
-    // (https://developers.cloudflare.com/pipelines/sinks/available-sinks/r2-data-catalog/), so
+    // (https://developers.cloudflare.com/basin-pipelines/sinks/available-sinks/r2-data-catalog/), so
     // the table is dropped too, with its rows, or takes a new name as a column change does
     // (docs/telemetry.md#setting-up-an-account).
     if (!sinks.some((candidate) => candidate.name === sinkName))

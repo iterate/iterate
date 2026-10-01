@@ -3,7 +3,7 @@
 ## How it works
 
 Four Iceberg tables in one R2 bucket per Cloudflare account — `events`, `logs`, `spans`,
-`metrics` — are written by Cloudflare Pipelines and read with R2 SQL or DuckDB. The platform hook
+`metrics` — are written by Basin Pipelines and read with Basin SQL or DuckDB. The platform hook
 in `core/os` sends every durable event to the `events` stream; Cloudflare's OTLP export posts
 `core/os`'s logs and spans to `apps/telemetry`, which flattens them into the `logs` and `spans`
 streams; `metrics.count/gauge/time` (`iterate/metrics`) write Analytics Engine data points, which
@@ -14,7 +14,7 @@ few minutes behind.
 
 ```
 core/os platform hook ─────────────────────────────────────────────────▶ events stream ─┐
-core/os console.* and spans ─ OTLP export ─▶ apps/telemetry ─────▶ logs, spans streams ─┼─▶ sinks ─▶ Iceberg in R2 ─▶ R2 SQL, DuckDB
+core/os console.* and spans ─ OTLP export ─▶ apps/telemetry ─────▶ logs, spans streams ─┼─▶ sinks ─▶ Iceberg in R2 ─▶ Basin SQL, DuckDB
 core/os iterate/metrics ─▶ Analytics Engine ─▶ health job, hourly ────▶ metrics stream ─┘
                            Analytics Engine ─▶ apps/admin /telemetry, health-job alerts
 ```
@@ -41,8 +41,8 @@ All four live in the namespace `telemetry`. Every row carries:
 | `project_id`, `path` | string    | the context it belongs to; null when none does                                                       |
 
 Each table keeps the rest of what it has in one JSON column — `payload`, `body` or `attributes` —
-with its size in `<column>_bytes`. R2 SQL's JSON functions refuse strings of 2,000 bytes or more,
-so every JSON function is guarded, which R2 SQL evaluates lazily (measured over 8 MB payloads):
+with its size in `<column>_bytes`. Basin SQL's JSON functions refuse strings of 2,000 bytes or more,
+so every JSON function is guarded, which Basin SQL evaluates lazily (measured over 8 MB payloads):
 
 ```sql
 SELECT CASE WHEN payload_bytes < 2000 THEN json_get_str(payload, 'model') END AS model, count(*)
@@ -162,8 +162,8 @@ labelled `row=<subscription>`:
   datasets, and the Observability page's Query Builder charts Workers Logs live, our own log
   fields included ("What Cloudflare already keeps", below); for Analytics Engine, Cloudflare names
   Grafana.
-- **History** — R2 SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
-  (1.4+) attached to the catalog. R2 SQL reads only the columns a query names, from the files whose
+- **History** — Basin SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
+  (1.4+) attached to the catalog. Basin SQL reads only the columns a query names, from the files whose
   statistics its filters cannot rule out, and answers with the bytes it scanned: $2.50 per TB, 10
   MB at least. Nothing is sorted, so a filter on an id (a trace, a project) reads that column of
   every file in range: bound such a query by `time`.
@@ -188,18 +188,40 @@ once on average, and its `max.activeWebsocketConnections` the sockets open. The 
 copying some day is that active time by object: `spans.object_id` ties an object to its project,
 which makes it a project's cost.
 
+## Basin
+
+Cloudflare's name, since 2026-10-01, for what the lake is built on: Pipelines, R2 Data Catalog and
+R2 SQL are Basin Pipelines, Basin Catalog and Basin SQL. Every path, binding, token and command
+here is the older one, which still works and has no end date: `/pipelines/v1`, `/r2-catalog`, the
+sink type `r2_data_catalog`, `wrangler r2 sql query` (`wrangler basin` needs wrangler 4.145).
+
+- **Why a Worker still receives the export.** Basin Pipelines takes four Logpush datasets, none of
+  them OpenTelemetry. The one that is Workers', `workers_trace_events`, has no spans, no trace or
+  span id on a log line, and 16 KB of logs an invocation. Cloudflare's roadmap names "zero-
+  configuration connections across Cloudflare's developer and observability products": when Workers
+  logs and traces reach a pipeline by themselves, `apps/telemetry`'s Worker goes.
+- **What a pipeline's SQL could not take over.** Flattening needs a row cut to a byte budget and
+  OTLP's attribute lists turned into columns; the SQL unnests one array a `SELECT`, cuts by
+  characters, and cannot be changed once made.
+- **Typed bindings.** `wrangler types` types a binding's rows from its stream's schema, at compile
+  time only: a row that breaks the schema is still accepted and dropped. The tests check every row
+  against its schema, which also holds a type to its range.
+- **Coming, and worth a change when it does.** A semi-structured column type (Iceberg V3's
+  Variant) in place of JSON text and its 2,000-byte guard; partitioning and sorting of a table
+  Pipelines writes, which would let an id filter skip files; a stream's schema that can change.
+
 ## Settings
 
-| setting                            | value                                                              | why                                                                                                                                                                                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| sink roll interval                 | 60 s                                                               | the minimum for Iceberg sinks                                                                                                                                                                                                        |
-| sink compression, row-group target | zstd, 32 MB                                                        | the 1 GB default made scans read whole files                                                                                                                                                                                         |
-| partitioning                       | `day(__ingest_ts)`, the sink's own                                 | no sort order exists; filters on `time` prune by file statistics                                                                                                                                                                     |
-| compaction                         | on, 128 MB target                                                  | a day's ~1,440 files per table merge into a handful                                                                                                                                                                                  |
-| snapshot expiration                | older than 1 day, keep 5                                           | replaced files are deleted a day after compaction                                                                                                                                                                                    |
-| OTLP export                        | 100 %, traces and logs, to `telemetry-traces` and `telemetry-logs` | `apps/telemetry` itself exports nothing: it would export itself                                                                                                                                                                      |
-| traces persisted in Cloudflare     | off for a deployment with a lake (`traces.persist: false`)         | kept there too, every span is billed a second time: $0.60 per million past 20 M a month, from 2026-10-01. Logs stay persisted: `prd-fault-alarm`, `debug-os-worker` and the Query Builder read Workers Logs                          |
-| retention                          | everything is kept                                                 | nothing can delete rows yet: the catalog has no row or partition expiry and R2 SQL only reads. The routes are an Iceberg engine's `DELETE` on a day's partition (untested against a sink that keeps writing) or a new table a period |
+| setting                            | value                                                              | why                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| sink roll interval                 | 60 s                                                               | the minimum for Iceberg sinks                                                                                                                                                                                                                                                                     |
+| sink compression, row-group target | zstd, 32 MB                                                        | the 1 GB default made scans read whole files                                                                                                                                                                                                                                                      |
+| partitioning                       | `day(__ingest_ts)`, the sink's own                                 | no sort order exists; filters on `time` prune by file statistics                                                                                                                                                                                                                                  |
+| compaction                         | on, 128 MB target                                                  | a day's ~1,440 files per table merge into a handful                                                                                                                                                                                                                                               |
+| snapshot expiration                | older than 1 day, keep 5                                           | replaced files are deleted a day after compaction                                                                                                                                                                                                                                                 |
+| OTLP export                        | 100 %, traces and logs, to `telemetry-traces` and `telemetry-logs` | `apps/telemetry` itself exports nothing: it would export itself                                                                                                                                                                                                                                   |
+| traces persisted in Cloudflare     | off for a deployment with a lake (`traces.persist: false`)         | kept there too, every span is billed a second time: $0.60 per million past 20 M a month, from 2026-10-01. Logs stay persisted: `prd-fault-alarm`, `debug-os-worker` and the Query Builder read Workers Logs                                                                                       |
+| retention                          | everything is kept                                                 | Basin has no table lifetime, partition expiry or `DELETE` of its own. Its documented route is an Iceberg engine (Spark, PyIceberg; not DuckDB) deleting whole days of `__ingest_ts`, the partition, after which snapshot expiration removes the files. Untested against a sink that keeps writing |
 
 ## Failures
 
@@ -232,7 +254,7 @@ Nothing waits on telemetry, and no failure of it reaches a caller.
   line, judged over the 70 minutes before each hourly run on the one Worker the lake's `envs.ts`
   entry names (`alertRulesWorkerName`: main on dev, since every preview's tests wedge deliveries on
   purpose); a row one of the lake's four pipelines dropped; a pipeline or destination that is
-  missing, stopped or failing. It does not see a sink that has stopped writing.
+  missing, stopped or failing; a pipeline that took records in and whose sink wrote none.
 
 ## Privacy
 
@@ -261,16 +283,16 @@ it: drop that table, its sink and its pipeline, and run setup again.
 Per Cloudflare account with a lake (the dev/preview account alone today; `telemetryEnvs` has no
 prd):
 
-|                  |                                                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| R2               | one bucket, `iterate-telemetry`, with its Data Catalog, compaction and snapshot expiration                             |
-| Pipelines        | four streams, four sinks, four pipelines (an account allows 20 of each)                                                |
-| Workers          | one, `telemetry`: no storage, no Durable Object, no route but workers.dev                                              |
-| Observability    | two OTLP destinations, `telemetry-traces` and `telemetry-logs`                                                         |
-| Analytics Engine | one dataset, `iterate_metrics`                                                                                         |
-| tokens           | the catalog token (Data Catalog write, the bucket's objects, R2 SQL read) and the admin app's (Account Analytics Read) |
-| Doppler          | project `telemetry` (the catalog token, the OTLP secret); `admin`'s `APP_CONFIG_METRICS__API_TOKEN`                    |
-| the health job   | two steps an hour: the alert check and the metrics copy                                                                |
+|                  |                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| R2               | one bucket, `iterate-telemetry`, with its Basin Catalog, compaction and snapshot expiration                         |
+| Basin Pipelines  | four streams, four sinks, four pipelines (an account allows 20 of each)                                             |
+| Workers          | one, `telemetry`: no storage, no Durable Object, no route but workers.dev                                           |
+| Observability    | two OTLP destinations, `telemetry-traces` and `telemetry-logs`                                                      |
+| Analytics Engine | one dataset, `iterate_metrics`                                                                                      |
+| tokens           | the catalog token (Data Catalog write, the bucket's objects, SQL read) and the admin app's (Account Analytics Read) |
+| Doppler          | project `telemetry` (the catalog token, the OTLP secret); `admin`'s `APP_CONFIG_METRICS__API_TOKEN`                 |
+| the health job   | two steps an hour: the alert check and the metrics copy                                                             |
 
 A `core/os` deployment takes part only when its `APP_CONFIG` names the lake's two bindings:
 `telemetry: { eventsStreamBinding, metricsDatasetBinding }`. Unset, the default, it has no lake:
@@ -295,25 +317,25 @@ Measured on the dev account on 2026-10-01, at list prices. One run of a preview'
 about 516,000 spans, 52,000 log rows and 16,000 events: 400 MB of JSON in, 28 MB stored. The dev
 account sees about 200 such runs a day, which sets the bill; prd writes a fortieth of that.
 
-| a month                                                        | dev, every preview exporting | prd, at today's volume |
-| -------------------------------------------------------------- | ---------------------------- | ---------------------- |
-| OTLP export, $0.05 per million past 10 M each of spans, logs   | $176                         | $4                     |
-| Pipelines, $0.06 a GB delivered and $0.04 a GB transformed     | $63–244                      | $0–2                   |
-| R2 storage, $0.015 a GB-month, growing while nothing is purged | $1, by a year $32            | under $1               |
-| the `telemetry` Worker, compaction, catalog operations         | under $20                    | under $1               |
-| Durable Object duration the hook's sends add                   | $12–51, before the outbox    | about $1               |
-| **the lake**                                                   | **about $270–460**           | **about $5–9**         |
-| traces persisted in Cloudflare, which a lake turns off         | $1,860 saved                 | $50 saved              |
+| a month                                                                                 | dev, every preview exporting | prd, at today's volume |
+| --------------------------------------------------------------------------------------- | ---------------------------- | ---------------------- |
+| OTLP export, $0.05 per million past 10 M each of spans, logs                            | $176                         | $4                     |
+| Basin Pipelines, $0.04 a GB of JSON transformed, $0.06 a GB a sink writes, uncompressed | $127                         | $0–2                   |
+| R2 storage, $0.015 a GB-month, growing while nothing is purged                          | $1, by a year $32            | under $1               |
+| the `telemetry` Worker, compaction, catalog operations                                  | under $20                    | under $1               |
+| Durable Object duration the hook's sends add                                            | under $20                    | about $1               |
+| **the lake**                                                                            | **about $340**               | **about $5–9**         |
+| traces persisted in Cloudflare, which a lake turns off                                  | $1,860 saved                 | $50 saved              |
 
-The Pipelines range is whether "uncompressed data delivered" is metered on the JSON sent or on what
-a sink writes; Cloudflare's page does not say. Half of a run's spans are a Durable Object's storage
-operations.
+The Pipelines line takes every pipeline's `SELECT *` for a transform, as Cloudflare's page does,
+and a sink's bill for what its own counter says it wrote: 0.98 GB of the 3.95 GB of JSON the lake
+took in over two days. Half of a run's spans are a Durable Object's storage operations.
 
 ## Queries
 
 Each ran on PR 3478's preview (`pr3478-7cede58`, 2026-09-30) with `wrangler r2 sql query` or the
 HTTP API, and the catalog token; what each scanned and cost was measured on 2026-10-01, once
-compaction had merged each table's files into six. R2 SQL answers every query with the bytes it
+compaction had merged each table's files into six. Basin SQL answers every query with the bytes it
 scanned, and bills $2.50 per TB of them, 10 MB at least, past the 10 GB a month included. `offset`
 is a reserved word: quote it, `"offset"`.
 
