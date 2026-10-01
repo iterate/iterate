@@ -1,4 +1,5 @@
 {
+  "name": "@iterate-com/config-heartbeat",
   "private": true,
   "type": "module",
   "main": "worker.ts",
