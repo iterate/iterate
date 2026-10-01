@@ -85,8 +85,8 @@ const githubHttpError = (error: Error) =>
 /**
  * This repository on GitHub: GITHUB_REPOSITORY in CI (Depot sets it as GitHub Actions does), else
  * the checkout's `origin`, for a script run on a laptop. iterate/iterate today and iterate/private
- * after the move (tasks/repo-move-to-iterate-private.md), so no script names it: Depot's listings
- * and GitHub's API ask here.
+ * after the move, so no script names it: Depot's listings, GitHub's API and the Copybara copies ask
+ * here.
  */
 export function getRepo() {
   const repository = process.env.GITHUB_REPOSITORY || checkoutOrigin();
@@ -125,6 +125,22 @@ export async function fileAtCommit(octokit: Octokit, input: { sha: string; path:
       githubHttpError(error).status === 404
     )
       return undefined;
+    throw error;
+  }
+}
+
+/** Whether `sha` is a commit of this repository: GitHub answers 422, "No commit found", when not. */
+export async function hasCommit(octokit: Octokit, sha: string) {
+  try {
+    await octokit.rest.repos.getCommit({ ...getRepo(), ref: sha });
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "HttpError" &&
+      githubHttpError(error).status === 422
+    )
+      return false;
     throw error;
   }
 }

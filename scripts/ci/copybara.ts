@@ -38,8 +38,7 @@ import { isDeepStrictEqual, promisify } from "node:util";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml, parseDocument, YAMLMap } from "yaml";
 import { z } from "zod";
-import type { Octokit } from "@octokit/rest";
-import { createOctokit, getRepo } from "./github.ts";
+import { createOctokit, getRepo, hasCommit } from "./github.ts";
 import { iterateAppFromPrd, iterateAppToken } from "./iterate-app-token.ts";
 
 const COPYBARA = {
@@ -91,7 +90,7 @@ export async function sync(options: {
     const withToken = ["-c", `credential.helper=store --file=${credentials}`];
     for (const copy of COPIES) {
       const last = (await copyHead({ copy, withToken, work }))?.copiedCommit;
-      const seed = !last || !(await hasCommit(github, { ...source, sha: last }));
+      const seed = !last || !(await hasCommit(github, last));
       if (seed)
         console.log(
           `[copybara] ${copy}: ${last ? `${repository.full_name} has no ${last}, the last commit it copied` : "nothing copied yet"}; starting from a snapshot of ${options.sha}`,
@@ -288,17 +287,6 @@ async function seedArgs(sha: string) {
     "--force-message",
     commit.slice(commit.indexOf("\n\n") + 2),
   ];
-}
-
-/** Whether `sha` is a commit of `owner/repo`: GitHub answers 422, "No commit found", when not. */
-async function hasCommit(github: Octokit, input: { owner: string; repo: string; sha: string }) {
-  try {
-    await github.rest.repos.getCommit({ owner: input.owner, repo: input.repo, ref: input.sha });
-    return true;
-  } catch (error) {
-    if (error instanceof Error && "status" in error && error.status === 422) return false;
-    throw error;
-  }
 }
 
 /**
