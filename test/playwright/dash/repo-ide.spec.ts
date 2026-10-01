@@ -3,7 +3,7 @@
 // browser until Commit sends them as one commit; the repo's history, its commits from anywhere, and
 // the diff of what changed are all on the page.
 import { expect } from "@playwright/test";
-import { test } from "../test-support/test.ts";
+import { test } from "../../helpers/test.ts";
 
 test("a repo opens as an IDE: edit a file and see its diff, make a new file and preview it, commit both, read the history, and follow a commit made elsewhere", async ({
   page,
