@@ -7,10 +7,10 @@
 # printing each file's diff. The fix is a refresh (`node scripts/ci/shadcn-drift.ts refresh`), never
 # a hand edit.
 #
-# THE REGISTRY ROUND TRIP (scripts/ci/shadcn-registry.ts round-trip): `shadcn add @iterate/<every
-# item>` from the built packages/ui/r, served locally, writes packages/ui's own files back. It runs
-# when the registry changes (every item file is in r/) and needs shadcn's registry for the items
-# ours name, such as `button`.
+# THE REGISTRY ROUND TRIP (scripts/ci/shadcn-registry.ts round-trip): `shadcn add` of every item in
+# packages/ui/registry.json, as this commit has them, served locally, writes packages/ui's own files
+# back. It runs when an item's files or the registry change, and needs shadcn's registry for the
+# items ours name, such as `button`.
 #
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
@@ -28,7 +28,9 @@ on:
       - scripts/ci/shadcn-drift.ts
       - scripts/ci/shadcn-registry.ts
       - packages/ui/registry.json
-      - packages/ui/r/**
+      - packages/ui/src/components/**
+      - packages/ui/src/lib/**
+      - copybara/packages/registry.json
       - packages/ui/components.json
       - packages/ui/package.json
       - packages/ui/tsconfig.json

@@ -2,19 +2,13 @@
 
 The packages built on [iterate](https://iterate.com)'s platform ([iterate/core](https://github.com/iterate/core)) that anyone can install: the agents and voice apps, docs, GitHub sync and more, in `packages/`. Alongside them are the project templates that use them, in `configs/`. A self-hosted platform offers those templates by building with `--template "github:iterate/packages#main&path:configs/<name>"`.
 
-The rendered components in `packages/ui` are a [shadcn registry](https://ui.shadcn.com/docs/registry). In an app set up with `shadcn init` and a Base UI style such as `base-nova`, add the registry to `components.json` and install a component as your app's own copy:
-
-```jsonc
-"registries": {
-  "@iterate": "https://raw.githubusercontent.com/iterate/packages/main/packages/ui/r/{name}.json"
-}
-```
+The rendered components in `packages/ui` are a [shadcn GitHub registry](https://ui.shadcn.com/docs/registry/github): in an app set up with `shadcn init` and a Base UI style such as `base-nova`, install a component as your app's own copy.
 
 ```sh
-npx shadcn@latest add @iterate/context-view
+npx shadcn@latest add iterate/packages/context-view
 ```
 
-`packages/ui/registry.json` lists the components.
+`npx shadcn@latest list iterate/packages` lists the components.
 
 This repo is a read-only copy of `packages/` and `configs/` from iterate's own repo, made by [Copybara](https://github.com/google/copybara) after each production deploy. Paths are the same in both, and each commit ends in `GitOrigin-RevId: <sha>`, naming the commit it came from.
 

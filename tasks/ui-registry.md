@@ -6,13 +6,13 @@ size: large
 # packages/ui is a shadcn registry, served from iterate/packages
 
 UI PR 2 (UI PR 1 was `tasks/complete/2026-09-30-os-owns-ui.md`). An app in another repo gets one of
-our rendered components with `shadcn add @iterate/<item>` and keeps its own copy. Apps in this
+our rendered components with `npx shadcn add iterate/packages/<item>` and keeps its own copy. Apps in this
 repo keep importing `@iterate-com/ui`.
 
 Status: implemented, waiting on CI and review.
 
 - Done: packages/ui laid out like an app (vendored shadcn in `components/ui/`, `#/` imports between
-  items), 18 items in `registry.json`, `r/` built and committed, the build and its checks, and docs.
+  items), 18 items in `registry.json` served as a shadcn GitHub registry, its checks, and docs.
 - Left: CI on the PR.
 
 ## Context
@@ -31,30 +31,16 @@ Status: implemented, waiting on CI and review.
 
 ## Shape
 
-```jsonc
-// an app's components.json
-{
-  "style": "base-nova",
-  "aliases": {
-    "components": "#/components",
-    "ui": "#/components/ui",
-    "hooks": "#/hooks",
-    "lib": "#/lib",
-    "utils": "cn",
-  },
-  "registries": {
-    "@iterate": "https://raw.githubusercontent.com/iterate/packages/main/packages/ui/r/{name}.json",
-  },
-}
-```
-
 ```sh
-pnpm dlx shadcn@4.21.0 add @iterate/context-view   # writes src/components/context-view/*, plus button, sheet, … from shadcn
+# in an app set up with `shadcn init` (base-nova); nothing goes in its components.json
+npx shadcn@latest add iterate/packages/context-view   # writes src/components/context-view/*, plus button, sheet, … from shadcn
 ```
 
-- `packages/ui/registry.json` lists the items. `shadcn build -o r` writes `packages/ui/r/<item>.json`,
-  which is committed. CI fails when `r/` is out of date.
-- **packages/ui is laid out like an app after `shadcn add`**, so `shadcn build` takes its files
+- A [GitHub registry](https://ui.shadcn.com/docs/registry/github) (decided in review, replacing a
+  committed `r/` built by `shadcn build` and fetched through a `components.json` `registries`
+  entry). `packages/ui/registry.json` lists the items. `copybara/packages/registry.json` becomes
+  iterate/packages' root `registry.json` and includes it; the CLI reads items and files from GitHub.
+- **packages/ui is laid out like an app after `shadcn add`**, so the registry holds its files
   unchanged:
   - shadcn's vendored components move to `src/components/ui/`. That is shadcn's convention and
     core/os's, and the folder the CLI writes `registryDependencies` into. Ours stay in
@@ -107,20 +93,21 @@ Not in the registry:
 
 ### Checks
 
-- Lint and Typecheck: `shadcn build` leaves `packages/ui/r/` unchanged (offline, fast).
+- Lint and Typecheck: `update` leaves `packages/ui/registry.json` unchanged, and the CLI finds it
+  valid (offline, fast).
 - ~~`packages/ui/src/registry.test.ts` checks each item's imports against registry.json~~ _(tests
   don't read source text (docs/vitest-patterns.md rule 8), and when two files must agree one is the
-  source of the other. So `scripts/ci/shadcn-registry.ts build` derives each item's dependencies
+  source of the other. So `scripts/ci/shadcn-registry.ts update` derives each item's dependencies
   from its imports, and throws on the same boundary problems. Its pure functions have unit tests.)_
-- The shadcn workflow (network, path filtered, not required; today's drift check): adding every
-  `@iterate` item to a copy of packages/ui's config, from the freshly built registry served
-  locally, writes back packages/ui's exact bytes. This proves the CLI rewrites and places files the
-  way the item test assumes.
+- The shadcn workflow (network, path filtered, not required; today's drift check): installing every
+  item as this commit has it (built in a temp folder laid out like the public copy, served
+  locally) into a copy of packages/ui's config writes back packages/ui's files. This proves the CLI
+  rewrites and places files the way `update` assumes.
 
 ## Assumptions (made while Misha was away; easy to change)
 
-- The `@iterate` namespace and `iterate` registry name: the user's phrasing, and free in
-  shadcn's public index.
+- ~~The `@iterate` namespace~~ _(the GitHub registry's addresses are `iterate/packages/<item>`)_.
+  The registry's name is `iterate`.
 - `posthog` is a registry item rather than part of `iterate/react`, because that would give core a
   `posthog-js` dependency. `app-shell` and `route-defaults` need it.
 - `plainLeftClick` moves out of `app-shell-palette-entries.ts` into a `plain-left-click` lib item,
@@ -137,12 +124,13 @@ Not in the registry:
 
 - [x] Vendored components into `src/components/ui/` via the drift script's refresh, with the lint,
       format, `rules/` and workflow lists following _(refresh rewrote them through the new `#/` aliases; pure renames apart from their import lines)_
-- [x] `#/*` imports in packages/ui. Cross-item imports use `#/`, and same-item imports stay relative _(a one-off codemod; `build` now enforces it)_
+- [x] `#/*` imports in packages/ui. Cross-item imports use `#/`, and same-item imports stay relative _(a one-off codemod; `update` now enforces it)_
 - [x] Apps' imports of vendored components follow the move _(`@iterate-com/ui/components/ui/<name>`, 38 files)_
 - [x] `plainLeftClick` into `src/lib/plain-left-click.ts` _(also the logo's svg beside `iterate-logo.tsx`)_
-- [x] `registry.json`, the build script, and the committed `r/` _(`node scripts/ci/shadcn-registry.ts build`, in scripts/ci beside the drift script: scripts already depends on oxc-parser, so the lockfile stays out of this PR)_
-- [x] ~~Registry item test~~ _(the boundary checks live in `build` instead; see Checks)_
-- [x] Lint and Typecheck step: `registry.json` and `r/` up to date
+- [x] `registry.json` and the script that fills it in _(`node scripts/ci/shadcn-registry.ts update`, in scripts/ci beside the drift script: scripts already depends on oxc-parser, so the lockfile stays out of this PR)_
+- [x] ~~The committed `r/`, built by `shadcn build`~~ _(replaced by the GitHub registry: `copybara/packages/registry.json`)_
+- [x] ~~Registry item test~~ _(the boundary checks live in `update` instead; see Checks)_
+- [x] Lint and Typecheck step: `registry.json` up to date and valid
 - [x] Round-trip check in the shadcn workflow _(`shadcn-registry.ts round-trip`)_
 - [x] `packages/ui/AGENTS.md`: adding an item, and how an app installs one. Also the iterate/packages
       README (`copybara/packages/README.md`)
@@ -173,3 +161,9 @@ Not in the registry:
   (base-nova's items list only `cn`; the style brings `@base-ui/react` and the rest), lib
   `ESNext.Disposable` (repo-ide's `using`), and a fresh `iterate`: the local pnpm store served a
   stale 0.3.0 for `pkg.pr.new/...iterate@main`, whose live tarball is 0.4.1.
+- Switched to a GitHub registry in review. The pinned CLI (4.21.0) already supports them, but its
+  GitHub hosts are constants, so a PR's items cannot be installed from a stand-in GitHub. The round
+  trip builds them with `shadcn build` in a temp folder laid out like the public copy (a root
+  `registry.json` including `packages/ui/registry.json`), points their `iterate/packages/<item>`
+  dependencies at a local server, and installs them by URL. `shadcn registry validate` of the same
+  layout checks 2 registry files and 18 items.

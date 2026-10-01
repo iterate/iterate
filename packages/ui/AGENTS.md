@@ -2,7 +2,7 @@
 
 The UI kit every client app in this repo imports as `@iterate-com/ui/*`, as shadcn's own monorepo
 setup shares one `packages/ui`. It is also the shadcn registry an app in another repo installs our
-rendered components from, keeping its own copy (`shadcn add @iterate/context-view`).
+rendered components from, keeping its own copy (`npx shadcn add iterate/packages/context-view`).
 
 ## Layout and imports
 
@@ -18,54 +18,45 @@ as they are:
 Imports use package.json's `#/*` subpath imports (`"#/*": "./src/*"`), with extensions. A file
 imports another item's file as `#/components/ui/button.tsx` or `#/components/posthog.tsx`, which
 `shadcn add` rewrites to the installing app's aliases (`@/components/ui/button` in an app with `@/`
-aliases). Files of one item import each other relatively (`./filters.tsx`): they travel together.
+aliases). The CLI only knows `button` is one of shadcn's components from the `ui/` in that path,
+which is why they live in `src/components/ui/`. Files of one item import each other relatively
+(`./filters.tsx`): they travel together.
 
 ## The registry
 
+It is a [GitHub registry](https://ui.shadcn.com/docs/registry/github). Copybara copies `packages/`
+to github.com/iterate/packages after each deploy, and `copybara/packages/registry.json` becomes
+that repo's root `registry.json`, which includes this folder's. The CLI reads the items and their
+files straight from GitHub. Nothing is built or published.
+
 `registry.json` names each item, describes it and lists its files.
-`node scripts/ci/shadcn-registry.ts build` works out the rest from the files and writes it back:
+`node scripts/ci/shadcn-registry.ts update` works out the rest from the files and writes it back:
 each file's type, the packages they import (`dependencies`), and the items they import through `#/`
-(`registryDependencies`: shadcn's by name, such as `button`, and ours as `@iterate/<item>`). Then
-`shadcn build` writes `r/<item>.json`, each file's content inside. Commit both. Copybara copies
-`packages/` to github.com/iterate/packages after each deploy, which is where apps fetch from.
+(`registryDependencies`: shadcn's by name, such as `button`, and ours by their GitHub address,
+`iterate/packages/<item>`). Commit it.
 
 An app installs an item once it has run `shadcn init` with a Base UI style (`base-nova`): our items
-name shadcn's components by name, and init installs the packages those use. It needs the `@iterate`
-registry in its `components.json`, and `allowImportingTsExtensions`, because an item's files import
-each other as `./filters.tsx`:
-
-```jsonc
-{
-  "style": "base-nova",
-  "aliases": {
-    "components": "#/components",
-    "ui": "#/components/ui",
-    "hooks": "#/hooks",
-    "lib": "#/lib",
-    "utils": "cn",
-  },
-  "registries": {
-    "@iterate": "https://raw.githubusercontent.com/iterate/packages/main/packages/ui/r/{name}.json",
-  },
-}
-```
+name shadcn's components by name, and init installs the packages those use. It also needs
+`allowImportingTsExtensions`, because an item's files import each other as `./filters.tsx`. Nothing
+goes in its `components.json`:
 
 ```sh
-pnpm dlx shadcn@4.21.0 add @iterate/context-view   # src/components/context-view/*, and code-block, button, sheet, …
+npx shadcn@latest add iterate/packages/context-view   # src/components/context-view/*, and code-block, button, sheet, …
 ```
 
 - **To add an item**, put its files in `src/components/` (or a folder there) and add it to
-  `registry.json` with a name, a one-line description and its files, then build. `build` throws on
-  a file no item lists, a relative import of another item's file, a `#/` import of a file that is
-  not in the registry (`src/apps/`, `src/hooks/`), and an `@iterate-com/*` import. Each would leave the
-  installing app with an import it cannot resolve.
+  `registry.json` with a name, a one-line description and its files, then run `update`. It throws
+  on a file no item lists, a relative import of another item's file, a `#/` import of a file that is
+  not in the registry (`src/apps/`, `src/hooks/`), and an `@iterate-com/*` import. Each would leave
+  the installing app with an import it cannot resolve.
 - **Hooks and providers are not items.** They belong in `iterate/react`, which an app installs as a
   package; `use-context-explorer` is still here until it moves.
 - **The CLI drops a file's leading comment** when it installs it (shadcn-ui/ui#9206, open fix
   shadcn-ui/ui#11920). The copy here keeps it.
-- **Checks.** Lint and Typecheck fails when `registry.json` or `r/` is not what `build` writes. The
-  shadcn workflow (below) adds every item from the built `r/`, served locally, to an app with this
-  package's `components.json`, and fails unless that writes these files back.
+- **Checks.** Lint and Typecheck fails when `registry.json` is not what `update` writes, or the CLI
+  finds it invalid. The shadcn workflow (below) installs every item as this commit has it, before
+  it is public, into an app with this package's `components.json`, and fails unless that writes
+  these files back.
 
 ## Vendored shadcn components
 
@@ -132,8 +123,7 @@ vendor another item, run `pnpm --dir <folder> exec shadcn add <item>`, then add 
   not a required check, and a pull request that leaves these files alone never runs it: it needs
   the network.
 - **The same workflow runs the registry's round trip** (`shadcn-registry.ts round-trip`) when
-  `registry.json` or `r/` changes. That covers every item's files, because `r/` holds their
-  content. It needs the network for the shadcn items ours name.
+  `registry.json` or an item's files change. It needs the network for the shadcn items ours name.
 
 ### Where the local changes went
 

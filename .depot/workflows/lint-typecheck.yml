@@ -53,13 +53,11 @@ jobs:
           - name: Check the control plane's schema
             run: pnpm --dir core/os db:check && pnpm --dir core/os db:generate && git diff --exit-code -- core/os/src/control-plane/db
           # The shadcn registry (packages/ui/AGENTS.md): registry.json's dependencies are what its
-          # items' files import, and r/ is what `shadcn build` writes from them. Copybara publishes r/
-          # as it is committed.
+          # items' files import. Copybara publishes it as it is committed.
           - name: Check the shadcn registry
             run: |
-              node scripts/ci/shadcn-registry.ts build
-              test -z "$(git status --porcelain -- packages/ui/registry.json packages/ui/r)" || {
-                git status --porcelain -- packages/ui/registry.json packages/ui/r >&2
-                echo 'Run `node scripts/ci/shadcn-registry.ts build` and commit packages/ui/registry.json and packages/ui/r.' >&2
+              node scripts/ci/shadcn-registry.ts update
+              git diff --exit-code -- packages/ui/registry.json || {
+                echo 'Run `node scripts/ci/shadcn-registry.ts update` and commit packages/ui/registry.json.' >&2
                 exit 1
               }

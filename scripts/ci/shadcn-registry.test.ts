@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { roundTripProblems, withDependencies } from "./shadcn-registry.ts";
 
-test("an item's imports become its packages and registry items: shadcn's by name, ours as @iterate/<item>", () => {
+test("an item's imports become its packages and registry items: shadcn's by name, ours by GitHub address", () => {
   const registry = withDependencies(
     registryOf({
       "app-shell": ["src/components/app-shell.tsx", "src/components/app-shell-palette.tsx"],
@@ -33,7 +33,11 @@ export const loadEditor = () => import("@codemirror/view");`,
         type: "registry:component",
         description: "app-shell",
         dependencies: ["@codemirror/view", "cmdk", "iterate"],
-        registryDependencies: ["@iterate/iterate-logo", "@iterate/plain-left-click", "sidebar"],
+        registryDependencies: [
+          "iterate/packages/iterate-logo",
+          "iterate/packages/plain-left-click",
+          "sidebar",
+        ],
         files: [
           { path: "src/components/app-shell.tsx", type: "registry:component" },
           { path: "src/components/app-shell-palette.tsx", type: "registry:component" },

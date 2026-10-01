@@ -31,14 +31,14 @@
         "lucide-react"
       ],
       "registryDependencies": [
-        "@iterate/iterate-logo",
-        "@iterate/plain-left-click",
-        "@iterate/posthog",
         "avatar",
         "button",
         "command",
         "dialog",
         "dropdown-menu",
+        "iterate/packages/iterate-logo",
+        "iterate/packages/plain-left-click",
+        "iterate/packages/posthog",
         "sidebar"
       ],
       "files": [
@@ -143,13 +143,13 @@
         "zod"
       ],
       "registryDependencies": [
-        "@iterate/code-block",
-        "@iterate/code-editor",
-        "@iterate/plain-left-click",
         "button",
         "dropdown-menu",
         "input",
         "input-group",
+        "iterate/packages/code-block",
+        "iterate/packages/code-editor",
+        "iterate/packages/plain-left-click",
         "sheet",
         "spinner"
       ],
@@ -271,7 +271,7 @@
         "@tanstack/react-router"
       ],
       "registryDependencies": [
-        "@iterate/route-defaults"
+        "iterate/packages/route-defaults"
       ],
       "files": [
         {
@@ -306,7 +306,7 @@
         "cn"
       ],
       "registryDependencies": [
-        "@iterate/iterate-logo"
+        "iterate/packages/iterate-logo"
       ],
       "files": [
         {
@@ -363,8 +363,8 @@
         "iterate"
       ],
       "registryDependencies": [
-        "@iterate/app-shell",
-        "breadcrumb"
+        "breadcrumb",
+        "iterate/packages/app-shell"
       ],
       "files": [
         {
@@ -488,8 +488,8 @@
       "type": "registry:component",
       "description": "TanStack Router's pending, not-found and error components.",
       "registryDependencies": [
-        "@iterate/posthog",
         "button",
+        "iterate/packages/posthog",
         "spinner"
       ],
       "files": [
