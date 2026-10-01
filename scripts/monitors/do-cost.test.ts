@@ -367,10 +367,10 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
     "09-22T17:41 prd resolve",
   ]);
 
-  // #error-pulse: a dashboard a day, whose DO cost row each run rewrote. In its thread, 3 pages and
-  // 2 escalations with both mentions, the first reply at $50/h sent to the channel too (prd's
-  // pages, ~$5/h at their peak, were not), and nothing else: each resolution edited its page, whose
-  // first line starts "✅ resolved:" and whose second says why.
+  // #error-pulse: one dashboard a day, its DO cost row set by every run. Its thread holds 3 pages and
+  // 2 escalations, each with both mentions; the first reply at $50/h also goes to the channel, and
+  // prd's pages, under $5/h, do not. A resolution is an edit: the page's first line starts
+  // "✅ resolved:" and its second says why.
   const [sep21, sep22] = slack.channel("#error-pulse");
   const thread = (dashboard: FakeMessage | undefined) =>
     dashboard!.replies.map((message) => ({

@@ -428,10 +428,10 @@ test("the first incident of a new UTC day opens that day's page, while yesterday
     "2026-09-24",
   );
   expect(nextDay.triage).toMatchObject({
-    // a minor incident: the new day's page is held unposted
+    // garple.com's lone 5xx is minor: it waits on an unposted page
     posts: [],
     held: [{ ts: "", text: expect.stringContaining("• visitor 5xx: garple.com 1") }],
-    // yesterday's page only restamps its times with their date
+    // the 09-23 page's times gain their date, and nothing else changes on it
     updates: [{ ts: "1.0", text: expect.not.stringContaining("garple.com"), reply: null }],
   });
   expect(nextDay.next.pages).toHaveLength(2);
