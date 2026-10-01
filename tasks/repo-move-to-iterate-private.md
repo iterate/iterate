@@ -114,10 +114,8 @@ dashboard unless we script it. Sign in with iterate would follow `apps/admin` (`
 - iterate/private: Depot CI connected, its secrets (`DOPPLER_TOKEN`), rulesets.
 - Comments that say `depot ci dispatch --repo iterate/iterate` (`.depot/workflows/*.yml`).
 - ci-reports: sign-in, then its repository check and an authenticated explainer read.
-- Found while here, not in this task's list: `scripts/os/config-templates.ts`,
-  `scripts/os/preview-config.ts` and `scripts/os-dev.ts` name templates
-  `github:iterate/iterate#<sha>&path:configs/<name>`, a commit the archive won't have after the
-  move; `packages/ui/src/components/app-build.tsx` links commits on iterate/iterate.
+- Template references (`github:iterate/iterate#<sha>&path:configs/<name>`) and
+  `app-build.tsx`'s commit links: done in iterate/iterate#3506, merged into this branch.
 
 ## Implementation notes
 
