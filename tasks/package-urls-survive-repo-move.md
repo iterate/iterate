@@ -34,9 +34,10 @@ two things:
    before a deploy, and the PR quick-launch links. Phase 0 stops both from downloading.
 
 iterate/private starts with fresh history: one initial commit of the copied code. Commit shas don't
-carry over and PR numbers restart. A build from before the move and one from after share no
-history, so the voice app's build card links each commit to its own repo and hides the compare link
-between them.
+carry over and PR numbers restart.
+
+No compatibility work for projects created before the move: we have no outside users, so the
+handful of existing projects (ours) get migrated by hand after the switch (Phase 2).
 
 The org-wide pkg-pr-new GitHub App install already covers iterate/private
 (`gh api orgs/iterate/installations`: `repository_selection: all`), so publishing there needs no setup.
@@ -45,18 +46,18 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
 
 ### pkg.pr.new builds (`pkg.pr.new/iterate/iterate/…`)
 
-| Where                                                                                                                                                                                               | What it is                                                                                                                                                                                                                   | Who sees it                                                                                                 | Becomes                                                                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `core/lib/src/pkg-pr-new.ts:41` `pkgPrNewVersion`                                                                                                                                                   | The URL of one of our builds. Used by `scripts/os/config-templates.ts`, `scripts/os/preview-packages.ts`, Docs' "Install Docs" route, `buildStanding`, `test/vitest/agents/support.ts` and `test/playwright/docs/support.ts` | Everything that writes a version                                                                            | One `pkgPrNewRepository` constant (Phase 0); `iterate/private` at the switch                                                                                                                     |
-| `core/lib/src/pkg-pr-new.ts:95` `buildStanding`                                                                                                                                                     | Counts a build as "ours" only if it's exactly `pkgPrNewVersion(name, commit)`                                                                                                                                                | Voice app's build card                                                                                      | Also counts `iterate/iterate` builds as ours, and says which repo each commit is in (Phase 0). Without this, every project pinned before the move shows as "own" and is never offered an upgrade |
-| `core/configs/{default,heartbeat,minimal}/package.json`                                                                                                                                             | devDependency `iterate@main`, used only for local `tsc`                                                                                                                                                                      | iterate/core (self-hosters), and every project born from them                                               | `pkg.pr.new/iterate/private/iterate@main` at the switch. Existing projects get a one-off fix-up commit afterwards                                                                                |
-| `configs/voice/package.json`                                                                                                                                                                        | dependency `@iterate-com/voice@main` (pinned at seed), devDependency `iterate@main`                                                                                                                                          | iterate/packages; self-hosts that bake it with `--template github:iterate/packages#main&path:configs/voice` | `iterate/private` at the switch. Without it, a seed silently pins the frozen pre-move build, then fails once cleanup removes it                                                                  |
-| `core/os/public/setup-prompt.md:216-217` "Adding voice"                                                                                                                                             | URL, plus the `x-commit-key` format `iterate:iterate:<sha>`                                                                                                                                                                  | Every deployment serves it; iterate/core                                                                    | `iterate/private` and `iterate:private:<sha>` at the switch                                                                                                                                      |
-| `.github/workflows/pkg-pr-new.yml:4-6`                                                                                                                                                              | Comments only; the workflow itself doesn't name the repo                                                                                                                                                                     | Us                                                                                                          | Text update at the switch                                                                                                                                                                        |
-| `scripts/os/preview-packages.ts:41,83`                                                                                                                                                              | Comment, and the timeout error's link to the workflow's runs                                                                                                                                                                 | Preview deploy logs                                                                                         | Built from the constant (Phase 0)                                                                                                                                                                |
-| `test/vitest/os/npm-packages.e2e.test.ts:58`                                                                                                                                                        | Hardcoded `sdkAt`                                                                                                                                                                                                            | e2e                                                                                                         | `pkgPrNewVersion` (Phase 0)                                                                                                                                                                      |
-| `core/configs/README.md:26`, `packages/{voice,ai-linter,github-sync,petshop-sdk}/README.md`                                                                                                         | Docs                                                                                                                                                                                                                         | iterate/core, iterate/packages                                                                              | Text update at the switch                                                                                                                                                                        |
-| `core/lib/src/pkg-pr-new.test.ts:134,188`, `core/os/src/project/templates.test.ts:67-104`, `packages/{voice,docs,github-sync,ai-linter}/src/install.test.ts`, `scripts/os/preview-packages.test.ts` | Test fixtures                                                                                                                                                                                                                | —                                                                                                           | Fixtures that mean "our build" go through `pkgPrNewVersion`; fixtures that only test URL shape can keep any owner/repo                                                                           |
+| Where                                                                                                                                                                                               | What it is                                                                                                                                                                                                                   | Who sees it                                                                                                 | Becomes                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `core/lib/src/pkg-pr-new.ts:41` `pkgPrNewVersion`                                                                                                                                                   | The URL of one of our builds. Used by `scripts/os/config-templates.ts`, `scripts/os/preview-packages.ts`, Docs' "Install Docs" route, `buildStanding`, `test/vitest/agents/support.ts` and `test/playwright/docs/support.ts` | Everything that writes a version                                                                            | One `pkgPrNewRepository` constant (Phase 0); `iterate/private` at the switch                                                    |
+| `core/lib/src/pkg-pr-new.ts:95` `buildStanding`                                                                                                                                                     | Counts a build as "ours" only if it's exactly `pkgPrNewVersion(name, commit)`                                                                                                                                                | Voice app's build card                                                                                      | Follows the constant. A project still pinned to an `iterate/iterate` build shows as "own" until it's migrated by hand           |
+| `core/configs/{default,heartbeat,minimal}/package.json`                                                                                                                                             | devDependency `iterate@main`, used only for local `tsc`                                                                                                                                                                      | iterate/core (self-hosters), and every project born from them                                               | `pkg.pr.new/iterate/private/iterate@main` at the switch. Existing projects: the manual migration                                |
+| `configs/voice/package.json`                                                                                                                                                                        | dependency `@iterate-com/voice@main` (pinned at seed), devDependency `iterate@main`                                                                                                                                          | iterate/packages; self-hosts that bake it with `--template github:iterate/packages#main&path:configs/voice` | `iterate/private` at the switch. Without it, a seed silently pins the frozen pre-move build, then fails once cleanup removes it |
+| `core/os/public/setup-prompt.md:216-217` "Adding voice"                                                                                                                                             | URL, plus the `x-commit-key` format `iterate:iterate:<sha>`                                                                                                                                                                  | Every deployment serves it; iterate/core                                                                    | `iterate/private` and `iterate:private:<sha>` at the switch                                                                     |
+| `.github/workflows/pkg-pr-new.yml:4-6`                                                                                                                                                              | Comments only; the workflow itself doesn't name the repo                                                                                                                                                                     | Us                                                                                                          | Text update at the switch                                                                                                       |
+| `scripts/os/preview-packages.ts:41,83`                                                                                                                                                              | Comment, and the timeout error's link to the workflow's runs                                                                                                                                                                 | Preview deploy logs                                                                                         | Built from the constant (Phase 0)                                                                                               |
+| `test/vitest/os/npm-packages.e2e.test.ts:58`                                                                                                                                                        | Hardcoded `sdkAt`                                                                                                                                                                                                            | e2e                                                                                                         | `pkgPrNewVersion` (Phase 0)                                                                                                     |
+| `core/configs/README.md:26`, `packages/{voice,ai-linter,github-sync,petshop-sdk}/README.md`                                                                                                         | Docs                                                                                                                                                                                                                         | iterate/core, iterate/packages                                                                              | Text update at the switch                                                                                                       |
+| `core/lib/src/pkg-pr-new.test.ts:134,188`, `core/os/src/project/templates.test.ts:67-104`, `packages/{voice,docs,github-sync,ai-linter}/src/install.test.ts`, `scripts/os/preview-packages.test.ts` | Test fixtures                                                                                                                                                                                                                | —                                                                                                           | Fixtures that mean "our build" go through `pkgPrNewVersion`; fixtures that only test URL shape can keep any owner/repo          |
 
 ### GitHub template references (`github:iterate/iterate#…`)
 
@@ -73,12 +74,12 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
 
 ### Related repo names in the same code paths
 
-| Where                                                                                                                                | Problem                                                                                                                    | Becomes                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `packages/docs/src/install.ts:30` `docsAgentGuide`                                                                                   | `raw.githubusercontent.com/iterate/iterate/main/…`, written into projects' AGENTS.md. Goes stale once the repo is archived | `iterate/packages`, which keeps the same paths (Phase 0)                                                          |
-| `packages/ui/src/components/app-build.tsx:155,184`                                                                                   | Commit and compare links to iterate/iterate                                                                                | Each commit links to its own repo; no compare link between repos (Phase 0)                                        |
-| `repository`/`homepage`/`bugs` in `core/lib/package.json` and `packages/{voice,docs,github-sync,petshop-sdk,ai-linter}/package.json` | Point at the archive                                                                                                       | `iterate/core` / `iterate/packages` with `directory` (Phase 0)                                                    |
-| `apps/dash/src/routes/_auth/projects/index.tsx` `templateFields`                                                                     | Matched `configs/<name>` only, so `?template=heartbeat` and `?template=minimal` landed on the default template             | ~~Match `core/configs/<name>` too~~ Already fixed on main (it matches by folder name) by the time Phase 0 started |
+| Where                                                                                                                                | Problem                                                                                                                    | Becomes                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/docs/src/install.ts:30` `docsAgentGuide`                                                                                   | `raw.githubusercontent.com/iterate/iterate/main/…`, written into projects' AGENTS.md. Goes stale once the repo is archived | `iterate/packages`, which keeps the same paths (Phase 0). Configs that installed Docs before keep the old address; a reinstall would add a second section |
+| `packages/ui/src/components/app-build.tsx:155,184`                                                                                   | Commit and compare links to `github.com/iterate/iterate`                                                                   | `iterate/private` at the switch                                                                                                                           |
+| `repository`/`homepage`/`bugs` in `core/lib/package.json` and `packages/{voice,docs,github-sync,petshop-sdk,ai-linter}/package.json` | Point at the archive                                                                                                       | `iterate/core` / `iterate/packages` with `directory` (Phase 0)                                                                                            |
+| `apps/dash/src/routes/_auth/projects/index.tsx` `templateFields`                                                                     | Matched `configs/<name>` only, so `?template=heartbeat` and `?template=minimal` landed on the default template             | ~~Match `core/configs/<name>` too~~ Already fixed on main (it matches by folder name) by the time Phase 0 started                                         |
 
 ### Handled elsewhere
 
@@ -99,19 +100,15 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
       use it, so the switch is one line plus a sweep of literal URLs _(the e2e and
       `pkg-pr-new.test.ts` go through `pkgPrNewVersion`; other fixtures stay literal so they read
       plainly, and fail loudly at the switch until swept)_
-- [x] `buildStanding` counts builds from `iterate/iterate` and from `pkgPrNewRepository` as ours,
-      `newest` is always `pkgPrNewRepository`'s `@main`, and the standing says which repo each
-      commit is in. Comparing by `last-modified` already works across repos _(`installedRepository`
-      and `newestRepository` on the standing)_
-- [x] The build card links each commit to its own repo, and links a compare only when both commits
-      are in the same one _(`Commit` in `packages/ui/src/components/app-build.tsx` takes a repository)_
+- [ ] ~~`buildStanding` counts builds from `iterate/iterate` as ours, and the build card links each
+      commit to its own repo~~ _(built, then removed: no outside users, so existing projects are
+      migrated by hand instead)_
 - [x] `config-templates.ts` and `os-dev.ts` take the preset's owner/repo from `origin`, through one
       helper shared with `build.ts` _(`githubHeadOf` in `core/os/scripts/build.ts`)_
 - [x] A creation naming one of the build's own presets at another commit is seeded from the build's
       copy, with no GitHub request _(`presetFiles` in `core/os/src/project/processor.ts`)_
 - [x] Quick-launch links use names only _(`templateQuickLaunches` takes no changed paths or head; the `templateFields` half was already on main)_
 - [x] `docsAgentGuide` → iterate/packages; `package.json` `repository` fields → the public copies
-      _(a reinstall rewrites the guide's old address in place rather than adding a second section)_
 
 ### Phase 1: the move (Misha and Jonas)
 
@@ -126,23 +123,24 @@ its packages under iterate/iterate at an iterate/private commit, and wait until 
 
 - [ ] `pkgPrNewRepository = "iterate/private"`
 - [ ] Literal URLs: `core/configs/*/package.json`, `configs/voice/package.json`, `setup-prompt.md` (and
-      `iterate:private:<sha>`), READMEs, workflow comments, any fixtures left. Done when
-      `git grep -n -E 'pkg\.pr\.new/iterate/iterate|github:iterate/iterate'` lists only the
-      `buildStanding` legacy entry, parser fixtures and `tasks/complete/`
+      `iterate:private:<sha>`), the build card's links in `packages/ui/src/components/app-build.tsx`,
+      READMEs, workflow comments, any fixtures left. Done when
+      `git grep -n -E 'pkg\.pr\.new/iterate/iterate|github:iterate/iterate|github\.com/iterate/iterate/(commit|compare)'`
+      lists only parser fixtures and `tasks/complete/`
 - [ ] Evidence on the PR's preview:
   - the pkg-pr-new run publishes under iterate/private at the head
   - the deploy logs `[pkg.pr.new] … serves … at <head>`
   - the voice and docs e2e rows install `iterate/private` builds
   - a project created from Voice gets a seed commit that pins `iterate/private/@iterate-com/voice@<sha>`
-  - a project pinned to an `iterate/iterate` build shows as "behind", with no compare link
 - Branches in flight on iterate/iterate get reapplied onto iterate/private as patches after the
   switch; with fresh history, nothing merges across.
 
-### Phase 2b: existing projects' devDependencies (low priority)
+### Phase 2b: migrate existing projects by hand
 
-- [ ] After the switch, a one-off commit to each prd project's config repo: `devDependencies.iterate`
-      `…/iterate/iterate/iterate@main` → `…/iterate/private/iterate@main`. Only where the line is
-      still exactly that; a project that changed it keeps its own
+- [ ] After the switch, re-pin each prd project's `@iterate-com/*` dependencies to iterate/private
+      builds and point `devDependencies.iterate` at `…/iterate/private/iterate@main`. Coordinated by
+      the "Iterate repo privatization status" session. Until then those projects keep running on
+      their pinned builds, and the voice app's build card shows them as "own"
 
 ### Phase 3: archive iterate/iterate
 
@@ -175,10 +173,9 @@ bumped, a risk that exists today and that the move doesn't change.
 
 1. **Preset reference from before a deploy:** the build seeds a reference to one of its own presets
    from its current copy, whatever the commit. An old reference gets today's template.
-2. **Existing projects' `devDependencies.iterate`:** fix them with a one-off commit after the switch
-   (Phase 2b). Low priority.
-3. **Build card commit links:** link to the commit's repo (iterate/private for builds after the move).
-   Revisit if anyone outside complains. No compare link across the move.
+2. **Existing projects:** no compatibility code for projects created before the move; we have no
+   outside users. Migrate ours by hand after the switch (Phase 2b).
+3. **Build card commit links:** link to iterate/private. Revisit if anyone outside complains.
 
 ## Implementation log
 
@@ -189,10 +186,12 @@ bumped, a risk that exists today and that the move doesn't change.
 - 2026-10-01: plan updated for fresh history in iterate/private and Misha's answers; Phase 0 starts
   on branch `package-urls-repo-move`.
 - Phase 0: main had already made the Dash's `templateFields` match presets by folder name, so the
-  Dash needed no change. Changing `docsAgentGuide` would have made a reinstall append a second Docs
-  section to configs that name the old address (`installDocs` looks for the URL), so a reinstall
-  now rewrites the old address in place. The generated preset reference is unchanged today:
+  Dash needed no change. The generated preset reference is unchanged today:
   `github:iterate/iterate#<HEAD>&path:configs/voice`, now read from `origin`.
+- Phase 0, second pass (Misha: "we have zero real customers"): removed the compatibility code for
+  projects created before the move: `buildStanding` counting iterate/iterate builds as ours with a
+  repository per commit, the build card's per-repo links, and `installDocs` rewriting the guide's
+  old address. Existing projects get a manual migration instead (Phase 2b).
 - Local checks: typecheck, lint, knip and format clean; tests of core/lib, core/os, packages/docs,
   packages/ui and scripts/os pass. `scripts/ci/toolchain.test.ts` and the shell-hook rows fail on
   macOS's bash 3.2 (`inherit_errexit`), on main too.

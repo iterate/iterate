@@ -39,11 +39,6 @@ export const isPkgPrNewCommit = (ref: string) => /^[0-9a-f]{40}$/.test(ref);
  *  with fresh history (tasks/package-urls-survive-repo-move.md). */
 export const pkgPrNewRepository = "iterate/iterate";
 
-/** Every repository that has published this repository's packages: a project pinned to a build of
- *  one of them is on ours, and `buildStanding` offers it main's newest. iterate/iterate's builds
- *  stay served after the move until pkg.pr.new's cleanup removes them. */
-const ourPkgPrNewRepositories = new Set([pkgPrNewRepository, "iterate/iterate"]);
-
 /** A build of one of this repository's packages (`iterate`, `@iterate-com/voice`, …): the
  *  pkg.pr.new workflow publishes every package together, for every main commit and for the head of
  *  a PR that changes one. */
@@ -74,58 +69,35 @@ export async function pinPkgPrNewVersion(
 }
 
 /** Where a project's installed build of one of this repository's packages stands against the newest
- *  build main has published, by commit (`buildStanding`). Each commit comes with the repository it
- *  is a commit of (`<owner>/<repo>`): a build from before the move to iterate/private shares no
- *  history with main's newest. */
+ *  build main has published, by commit (`buildStanding`). */
 export type BuildStanding =
   /** `installed`, the version as its package.json pins it, is not this repository's build at a
    *  commit (an npm version, a fork's build): the project's own, which it upgrades itself */
   | { kind: "own"; installed: string }
   /** the installed build is main's newest */
-  | { kind: "newest"; installed: string; installedRepository: string }
+  | { kind: "newest"; installed: string }
   /** main published `newest` after `installed`, or pkg.pr.new no longer serves `installed`: an
    *  upgrade, to `version` (`newest` as package.json pins it) */
-  | {
-      kind: "behind";
-      installed: string;
-      installedRepository: string;
-      newest: string;
-      newestRepository: string;
-      version: string;
-    }
+  | { kind: "behind"; installed: string; newest: string; version: string }
   /** `installed` was published after main's newest: a pull request's build */
-  | {
-      kind: "ahead";
-      installed: string;
-      installedRepository: string;
-      newest: string;
-      newestRepository: string;
-    };
+  | { kind: "ahead"; installed: string; newest: string };
 
 /**
  * WHETHER MAIN HAS A NEWER BUILD of package `name` than `installed`, the version a project's source
  * pins: main's newest is `…@main` at the commit pkg.pr.new serves for it now, and newer is later
  * published, by pkg.pr.new's `last-modified` (every main commit publishes a build, so a new commit
- * is a new build). That holds across repositories too, so a build iterate/iterate published is
- * behind main's newest in iterate/private. The two HEADs go at once, each bounded as
- * `pinPkgPrNewVersion` says. A build answered without its commit or publish time throws, as does
- * one pkg.pr.new keeps failing, so a standing is never guessed. An app's Worker asks (a server
- * function): a page cannot read these headers.
+ * is a new build). The two HEADs go at once, each bounded as `pinPkgPrNewVersion` says. A build
+ * answered without its commit or publish time throws, as does one pkg.pr.new keeps failing, so a
+ * standing is never guessed. An app's Worker asks (a server function): a page cannot read these
+ * headers.
  */
 export async function buildStanding(
   name: string,
   installed: string,
   fetchFn: typeof fetch = globalThis.fetch,
 ): Promise<BuildStanding> {
-  const build = pkgPrNewVersionOf(name, installed);
-  if (!build) return { kind: "own", installed };
-  const installedRepository = `${build.owner}/${build.repo}`;
-  const commit = build.ref;
-  if (
-    !ourPkgPrNewRepositories.has(installedRepository) ||
-    !isPkgPrNewCommit(commit) ||
-    installed !== `https://pkg.pr.new/${installedRepository}/${name}@${commit}`
-  )
+  const commit = pkgPrNewVersionOf(name, installed)?.ref ?? "";
+  if (!isPkgPrNewCommit(commit) || installed !== pkgPrNewVersion(name, commit))
     return { kind: "own", installed };
   const main = pkgPrNewVersion(name, "main");
   const [newest, current] = await Promise.all([
@@ -139,17 +111,15 @@ export async function buildStanding(
   // a build pkg.pr.new answers 404 for is older than every one it serves
   if (current.status !== 404 && !current.publishedAt)
     throw new Error(`${installed} answered ${current.status} without saying when it was published`);
-  if (installedRepository === pkgPrNewRepository && newest.commit === commit)
-    return { kind: "newest", installed: commit, installedRepository };
-  const builds = {
-    installed: commit,
-    installedRepository,
-    newest: newest.commit,
-    newestRepository: pkgPrNewRepository,
-  };
+  if (newest.commit === commit) return { kind: "newest", installed: commit };
   if (current.publishedAt && current.publishedAt > newest.publishedAt)
-    return { kind: "ahead", ...builds };
-  return { kind: "behind", ...builds, version: pkgPrNewVersion(name, newest.commit) };
+    return { kind: "ahead", installed: commit, newest: newest.commit };
+  return {
+    kind: "behind",
+    installed: commit,
+    newest: newest.commit,
+    version: pkgPrNewVersion(name, newest.commit),
+  };
 }
 
 /**

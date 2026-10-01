@@ -7,8 +7,7 @@ import { Spinner } from "#/components/ui/spinner.tsx";
 type Checked = { installed: string } & ({ standing: BuildStanding } | { error: string });
 
 /** How the last upgrade from this page ended. */
-/** `upgraded`: the standing the upgrade started from, `behind` main's newest. */
-type Outcome = { kind: "upgraded"; behind: Behind } | { kind: "failed"; error: string };
+type Outcome = { kind: "upgraded"; from: string; to: string } | { kind: "failed"; error: string };
 
 /**
  * AN INSTALLED APP'S BUILD, and its upgrade to main's newest: the Agents app's sidebar and the Voice
@@ -57,7 +56,7 @@ export function AppBuild({
     setOutcome(undefined);
     try {
       await upgrade(behind.version);
-      setOutcome({ kind: "upgraded", behind });
+      setOutcome({ kind: "upgraded", from: behind.installed, to: behind.newest });
     } catch (error) {
       setOutcome({ kind: "failed", error: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -101,9 +100,7 @@ export function AppBuild({
       )}
       {outcome?.kind === "upgraded" ? (
         <p role="status" className="text-foreground">
-          Upgraded from{" "}
-          <Commit repository={outcome.behind.installedRepository} sha={outcome.behind.installed} />{" "}
-          to <Commit repository={outcome.behind.newestRepository} sha={outcome.behind.newest} />.
+          Upgraded from <Commit sha={outcome.from} /> to <Commit sha={outcome.to} />.
         </p>
       ) : outcome?.kind === "failed" ? (
         <p role="alert" data-type="error" className="break-words text-destructive">
@@ -137,40 +134,31 @@ function Standing({
     case "newest":
       return (
         <p>
-          <Commit repository={standing.installedRepository} sha={standing.installed} />, the newest
-          on main.
+          <Commit sha={standing.installed} />, the newest on main.
         </p>
       );
     case "ahead":
       return (
         <p>
-          <Commit repository={standing.installedRepository} sha={standing.installed} />, newer than
-          main's newest, <Commit repository={standing.newestRepository} sha={standing.newest} />.
+          <Commit sha={standing.installed} />, newer than main's newest,{" "}
+          <Commit sha={standing.newest} />.
         </p>
       );
     case "behind":
       return (
         <>
           <p>
-            <Commit repository={standing.installedRepository} sha={standing.installed} />. Main has
-            a newer one, <Commit repository={standing.newestRepository} sha={standing.newest} />
-            {/* a build from before the move to iterate/private shares no history with main's */}
-            {standing.installedRepository === standing.newestRepository ? (
-              <>
-                {" "}
-                (
-                <a
-                  className="underline underline-offset-2 hover:text-foreground"
-                  href={`https://github.com/${standing.newestRepository}/compare/${standing.installed}...${standing.newest}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  what changed
-                </a>
-                )
-              </>
-            ) : null}
-            .
+            <Commit sha={standing.installed} />. Main has a newer one,{" "}
+            <Commit sha={standing.newest} /> (
+            <a
+              className="underline underline-offset-2 hover:text-foreground"
+              href={`https://github.com/iterate/iterate/compare/${standing.installed}...${standing.newest}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              what changed
+            </a>
+            ).
           </p>
           <div>
             <Button size="sm" disabled={upgrading} onClick={() => onUpgrade(standing)}>
@@ -188,12 +176,12 @@ function Standing({
   }
 }
 
-/** A build's commit, short, linked to it in its repository on GitHub (`<owner>/<repo>`). */
-function Commit({ repository, sha }: { repository: string; sha: string }) {
+/** A build's commit, short, linked to it on GitHub. */
+function Commit({ sha }: { sha: string }) {
   return (
     <a
       className="font-mono underline underline-offset-2 hover:text-foreground"
-      href={`https://github.com/${repository}/commit/${sha}`}
+      href={`https://github.com/iterate/iterate/commit/${sha}`}
       target="_blank"
       rel="noreferrer"
       title={sha}

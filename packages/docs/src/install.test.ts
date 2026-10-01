@@ -1,12 +1,6 @@
 import { expect, test } from "vitest";
 import { DocContract, DocsContract } from "./contract.ts";
-import {
-  docsAgentGuide,
-  docsAgentsSection,
-  docsModule,
-  ensureDoc,
-  installDocs,
-} from "./install.ts";
+import { docsAgentsSection, docsModule, ensureDoc, installDocs } from "./install.ts";
 
 // install.ts spells the processors' consumes itself: the page imports it, and contract.ts pulls in
 // iterate/stream/processor, which a browser can't load
@@ -91,14 +85,4 @@ test("installing Docs commits docs.ts, the pin beside the config's other depende
   files["AGENTS.md"] = commits[0].changes[2].content;
   await installDocs(project, "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@def");
   expect(commits[1].changes.map((change: any) => change.path)).toEqual(["docs.ts", "package.json"]);
-
-  // installed while the guide was on iterate/iterate: its pointer is pointed at the guide's address
-  // now, rather than the config given a second section
-  const before = "https://raw.githubusercontent.com/iterate/iterate/main/packages/docs/AGENTS.md";
-  files["AGENTS.md"] = `# Config\n\nDocs: read ${before} first, as ${before} says.\n`;
-  await installDocs(project, "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@ghi");
-  expect(commits[2].changes[2]).toEqual({
-    path: "AGENTS.md",
-    content: `# Config\n\nDocs: read ${docsAgentGuide} first, as ${docsAgentGuide} says.\n`,
-  });
 });
