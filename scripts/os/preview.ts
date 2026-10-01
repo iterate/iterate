@@ -1272,4 +1272,4 @@ async function main(command: Command, options: PreviewOptions) {
   return deployPreview(await accountContext(), name, pr, apps);
 }
 
-void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });
+void createCli(import.meta).run({ formatError: describe });

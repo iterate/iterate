@@ -213,4 +213,4 @@ export function refresh() {
   }
 }
 
-void createCli({ ...import.meta, name: "shadcn-drift" }).run();
+void createCli(import.meta).run();

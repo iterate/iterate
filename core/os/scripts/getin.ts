@@ -148,4 +148,4 @@ async function localDash(origin: string, issuer: string) {
 }
 
 // trpc-cli runs it only when this file is the entry point (it checks `import.meta`)
-void createCli({ ...import.meta, name: "getin" }).run();
+void createCli(import.meta).run();

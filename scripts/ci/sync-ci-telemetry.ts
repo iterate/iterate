@@ -598,4 +598,4 @@ type WorkflowDetail = z.infer<typeof WorkflowDetail>;
 /** GetJobSummary's answer for one attempt: its steps' summaries joined, empty when none wrote one. */
 const JobSummary = z.object({ markdown: z.string().default("") });
 
-void createCli({ ...import.meta, name: "sync-ci-telemetry" }).run();
+void createCli(import.meta).run();

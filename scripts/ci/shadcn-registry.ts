@@ -352,4 +352,4 @@ export async function roundTrip() {
   }
 }
 
-void createCli({ ...import.meta, name: "shadcn-registry" }).run();
+void createCli(import.meta).run();

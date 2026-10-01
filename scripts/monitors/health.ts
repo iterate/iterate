@@ -492,4 +492,4 @@ export async function previousState(options: {
   );
 }
 
-void createCli({ ...import.meta, name: "health" }).run();
+void createCli(import.meta).run();

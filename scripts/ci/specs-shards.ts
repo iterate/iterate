@@ -159,4 +159,4 @@ export default class SpecsShards {
   }
 }
 
-void createCli({ ...import.meta, name: "specs-shards" }).run();
+void createCli(import.meta).run();

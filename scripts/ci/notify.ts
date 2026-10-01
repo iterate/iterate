@@ -625,4 +625,4 @@ export async function workflowResolved(options: { testRun?: boolean } = {}) {
   await resolveWorkflowPage(slack, { ...input, now: new Date() });
 }
 
-void createCli({ ...import.meta, name: "notify" }).run();
+void createCli(import.meta).run();

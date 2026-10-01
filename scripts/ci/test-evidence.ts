@@ -704,4 +704,4 @@ function failStep(command: keyof typeof stepFailureTitles, error: unknown): neve
   process.exit(1);
 }
 
-void createCli({ ...import.meta, name: "test-evidence" }).run();
+void createCli(import.meta).run();

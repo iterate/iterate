@@ -72,4 +72,4 @@ export function offset(target: string) {
   return row[3];
 }
 
-void createCli({ ...import.meta, name: "config-image" }).run();
+void createCli(import.meta).run();

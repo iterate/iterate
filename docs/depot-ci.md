@@ -330,7 +330,7 @@ branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
 - A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
   `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with
-  `createCli({ ...import.meta })` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  `createCli(import.meta)` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
   `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
   not install.
