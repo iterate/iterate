@@ -59,12 +59,13 @@ Assumptions (mine, not Misha's; flag if wrong):
 
 - [x] fault alarm: a new incident joins the open page posted the same UTC day instead of opening a
       new page; a new burst replies in that page's thread with mentions _prd-fault-alarm.ts
-      `todaysPage`; replaying 09-30 21:00–23:45 gives 1 page and 1 reply instead of 10 and 8_
-- [x] fault alarm: every first-level `*.iterate.com` name except the apex, www and the first-party
-      hosts (envs.ts `excludedHostnames`) is one incident, "iterate.com subdomains", listing hosts
-      _`isSiteSubdomain`; docs.iterate.com is a real name the site serves and lands in the group
-      too, named in its hosts_
-- [x] fault alarm: 5xx and request-line errors on scanner paths are dropped _`isScannerPath`_
+      `todaysPage`; replaying 09-30 21:00–23:45 gives 1 page and 7 thread replies instead of 10
+      pages and 8 broadcast replies_
+- [ ] ~~fault alarm: every first-level `*.iterate.com` name except the apex, www and the first-party
+      hosts is one incident, "iterate.com subdomains", listing hosts~~ _dropped (Misha, 2026-10-01):
+      made-up names answer 404 now (config 528dc1b), so they no longer 5xx_
+- [ ] ~~fault alarm: 5xx and request-line errors on scanner paths are dropped~~ _dropped: incidents
+      are keyed by host, not path, so scanner paths never opened pages; they only inflated counts_
 - [x] fault alarm, health, do-cost, notify: escalation replies are not sent to the channel
       _`PageUpdate` has no `broadcast`; notify's was already thread-only_
 - [x] every poster: resolving edits the page and mentions nobody (slack.ts `resolvePage`, health.ts
@@ -157,9 +158,9 @@ Design (from mapping every poster, 2026-10-01):
 
 - 2026-10-01: replayed prd's logs for 09-30 20:50–23:50 through the new alarm (alarm() with the
   Slack fake, state carried between 15-minute windows): one page at 21:05 with both mentions,
-  edits after, one thread reply at 22:05 (iterate.com grew tenfold), nothing sent to the channel.
-  The page lists "visitor 5xx: iterate.com subdomains 2436 on enterprise., inference., open., my.,
-  build. +73" beside "iterate.com 144" and "www.iterate.com 23", so the apex outage is readable.
+  edits after, seven thread replies (new bursts on made-up subdomains, iterate.com grew tenfold),
+  nothing else sent to the channel. With subdomain grouping it was one reply, but Misha dropped
+  grouping since those names 404 now.
 - The site's 500s were `recipe: 404`: the iterate project's worker.ts read the recipe from GitHub
   raw at a path #3487 moved, and threw when it had no copy. Someone had already fixed RECIPE_URL by
   10-01.
