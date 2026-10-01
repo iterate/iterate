@@ -211,6 +211,9 @@ Nothing waits on telemetry, and no failure of it reaches a caller.
   (`telemetry.platform-failure-send`, `telemetry.deploy-reset-send`, or an issue); the rows waiting,
   and those of a send that is out, are lost when the context resets, and nothing says so. An event that finds 8 MB
   already waiting, or whose row is over 1 MB, is dropped and counted (`telemetry.events-dropped`).
+  The delivery loop hands the hook an event at least once, so a context that restarts before a
+  delivery is recorded sends its row again (4 rows of 16,025 on one preview run): dedupe on the
+  key.
 - **`apps/telemetry`** answers 503 when the platform fails a send or the secret is wrong
   (`telemetry.secret-refused`), and a send that fails any other way escapes as a 500, so Cloudflare
   sends the batch again (it did through a 12-minute
