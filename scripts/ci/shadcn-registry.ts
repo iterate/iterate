@@ -37,26 +37,27 @@ import { join, posix, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parseSync } from "oxc-parser";
 import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { parseView } from "./shadcn-drift.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const ui = resolve(repoRoot, "packages/ui");
 
-type Registry = {
-  $schema: string;
-  name: string;
-  homepage: string;
-  items: RegistryItem[];
-};
-
-type RegistryItem = {
-  name: string;
-  type?: string;
-  description: string;
-  dependencies?: string[];
-  registryDependencies?: string[];
-  files: { path: string; type?: string }[];
-};
+/** registry.json's hand-written part: each item's name, description and files. `build` derives
+ *  the rest, so parsing drops it. */
+const Registry = z.object({
+  $schema: z.string(),
+  name: z.string(),
+  homepage: z.string(),
+  items: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string(),
+      files: z.array(z.object({ path: z.string() })),
+    }),
+  ),
+});
+type Registry = z.infer<typeof Registry>;
 
 /** Every package an app already has: shadcn's own items leave them out too. */
 const ASSUMED_PACKAGES = new Set(["react", "react-dom"]);
@@ -64,7 +65,7 @@ const ASSUMED_PACKAGES = new Set(["react", "react-dom"]);
 /** `registry` with each item's file types, `dependencies` and `registryDependencies` worked out from
  *  `source` (every file under packages/ui/src, by its path in packages/ui, `src/components/…`).
  *  Throws listing every file an app could not install as is (the header). Pure. */
-export function withDependencies(registry: Registry, source: Map<string, string>): Registry {
+export function withDependencies(registry: Registry, source: Map<string, string>) {
   const problems: string[] = [];
   const itemOf = new Map<string, string>();
   for (const item of registry.items)
@@ -218,8 +219,8 @@ function readSource() {
   );
 }
 
-function readRegistry(): Registry {
-  return JSON.parse(readFileSync(join(ui, "registry.json"), "utf8")) as Registry;
+function readRegistry() {
+  return Registry.parse(JSON.parse(readFileSync(join(ui, "registry.json"), "utf8")));
 }
 
 /** Writes each item's dependencies into registry.json, then r/ with `shadcn build`. */
@@ -262,7 +263,7 @@ export async function roundTrip() {
     );
     mkdirSync(join(app, "src/styles"), { recursive: true });
     copyFileSync(join(ui, "src/styles/globals.css"), join(app, "src/styles/globals.css"));
-    const config = JSON.parse(readFileSync(join(ui, "components.json"), "utf8")) as object;
+    const config = JSON.parse(readFileSync(join(ui, "components.json"), "utf8"));
     writeFileSync(
       join(app, "components.json"),
       JSON.stringify({
