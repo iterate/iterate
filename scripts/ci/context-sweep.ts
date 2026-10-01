@@ -484,4 +484,4 @@ function required(name: string): string {
   return value;
 }
 
-void createCli({ ...import.meta, name: "context-sweep" }).run();
+void createCli(import.meta).run();

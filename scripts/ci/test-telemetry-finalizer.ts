@@ -139,4 +139,4 @@ export function unitRowBudget(artifacts: TestTelemetryArtifact[]) {
   ];
 }
 
-void createCli({ ...import.meta, name: "test-telemetry-finalizer" }).run();
+void createCli(import.meta).run();

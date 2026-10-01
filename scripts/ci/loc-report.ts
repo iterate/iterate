@@ -385,4 +385,4 @@ export default async function locReport(
   );
 }
 
-void createCli({ ...import.meta, name: "loc-report" }).run();
+void createCli(import.meta).run();

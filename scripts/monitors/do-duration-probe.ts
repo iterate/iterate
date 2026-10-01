@@ -360,4 +360,4 @@ export async function probeAccount(options: {
   };
 }
 
-void createCli({ ...import.meta, name: "do-duration-probe" }).run();
+void createCli(import.meta).run();

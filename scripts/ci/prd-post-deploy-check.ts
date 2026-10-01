@@ -280,4 +280,4 @@ const get = (url: string) =>
     signal: AbortSignal.timeout(15_000),
   }).catch(() => null);
 
-void createCli({ ...import.meta, name: "prd-post-deploy-check" }).run();
+void createCli(import.meta).run();

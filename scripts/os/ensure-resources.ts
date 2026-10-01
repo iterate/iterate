@@ -65,4 +65,4 @@ export default async function ensureResources(options: { env: string }) {
   }
   console.log(`✅ ${ctx.env.name} resources all present and match envs.ts`);
 }
-void createCli({ ...import.meta, name: "ensure-resources" }).run();
+void createCli(import.meta).run();

@@ -214,4 +214,4 @@ export default async function voiceCall(
   );
 }
 
-void createCli({ ...import.meta, name: "voice-call" }).run();
+void createCli(import.meta).run();

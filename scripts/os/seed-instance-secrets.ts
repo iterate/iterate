@@ -87,4 +87,4 @@ export default async function seedInstanceSecrets(options: {
   }
 }
 
-void createCli({ ...import.meta, name: "seed-instance-secrets" }).run();
+void createCli(import.meta).run();

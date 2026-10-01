@@ -123,4 +123,4 @@ export default async function controlPlaneLoad(options: {
     throw new Error("control-plane-load: refusals, mismatches or an index behind — see above");
   console.log("✅ every triple made, indexed and reachable");
 }
-void createCli({ ...import.meta, name: "control-plane-load" }).run();
+void createCli(import.meta).run();

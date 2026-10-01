@@ -113,4 +113,4 @@ async function createResources(ctx: EnvContext<OsDeployableEnv>) {
   return database.uuid;
 }
 
-void createCli({ ...import.meta, name: "deploy" }).run();
+void createCli(import.meta).run();

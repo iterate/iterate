@@ -1366,4 +1366,4 @@ export async function previousState(options: { out: string }) {
   });
 }
 
-void createCli({ ...import.meta, name: "prd-fault-alarm" }).run();
+void createCli(import.meta).run();
