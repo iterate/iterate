@@ -12,7 +12,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useMemo } from "react";
 import { z } from "zod";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import {
   Table,
   TableBody,
@@ -20,7 +20,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@iterate-com/ui/components/table";
+} from "@iterate-com/ui/components/ui/table";
 
 /** THE PANELS, each over `iterate_metrics` (docs/telemetry.md "Metrics": blob1…6 are name, kind,
  *  worker, project, path and labels, double1 the value), weighted by `_sample_interval` since
