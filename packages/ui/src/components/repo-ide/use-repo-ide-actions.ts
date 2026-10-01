@@ -141,8 +141,8 @@ export function useRepoIdeActions({
         parent: files.commitOid,
         author,
       });
-      if (plan.mode === "everything") store.discardAll();
-      else store.clearStaged(plan.paths);
+      // only what was sent goes: an edit or a file made while the commit was in flight stays
+      store.clearCommitted(plan.entries);
       // HEAD moved: the working edits that survive belong under the new oid's key. Migrated only
       // after the file list is read again — until then the IDE still reads and writes the old
       // oid's store, and an earlier migration would blank the working tree it shows.

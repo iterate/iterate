@@ -1,7 +1,7 @@
 // The repo IDE's reads of one repo: its file list at the tip, kept current by the repo's commits,
 // and the reads a page makes once (a file at a commit, a commit's changed files). The project is
 // the root context the page holds open; each read opens the repo's handle and lets it go.
-import { useCallback, useEffect, useState, type DependencyList } from "react";
+import { useCallback, useEffect, useRef, useState, type DependencyList } from "react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import type { RepoLogEntry } from "iterate/api";
@@ -78,14 +78,19 @@ function watchRepoCommits(
  *  whoever made it. `reload` reads now, after this page's own commit. */
 export function useRepoFiles(project: RepoProject | undefined, repoPath: string) {
   const [state, setState] = useState<RepoFilesState>({ status: "pending" });
+  // each read takes a number: an answer that is not the newest read's is dropped, so a slow read
+  // never replaces the list a later one (a commit's) already showed
+  const newestRead = useRef(0);
 
   const read = useCallback(async () => {
     if (!project) return;
+    const mine = ++newestRead.current;
     try {
       using repo = project.repos.get(repoPath);
-      setState({ status: "loaded", value: await repo.listFiles() });
+      const value = await repo.listFiles();
+      if (mine === newestRead.current) setState({ status: "loaded", value });
     } catch (error) {
-      setState({ status: "failed", message: messageOf(error) });
+      if (mine === newestRead.current) setState({ status: "failed", message: messageOf(error) });
     }
   }, [project, repoPath]);
 
@@ -128,7 +133,8 @@ export async function readRepoFile(
   using repo = project.repos.get(repoPath);
   const content = await repo.readFile(path, commitOid ? { commitOid } : undefined);
   // oxlint-disable-next-line iterate/simple-truthiness-check -- null is no such file, "" an empty one
-  return content === null ? undefined : content;
+  if (content === null) return undefined;
+  return content;
 }
 
 export type ChangedFile = { path: string; status: "added" | "deleted" | "modified" };

@@ -88,18 +88,6 @@ class WorkingTreeStore {
     this.#patch(path, (change) => ({ staged: change.staged }));
   }
 
-  /** Drop the staged snapshots of committed paths (post-commit cleanup). */
-  clearStaged(paths: string[]): void {
-    const next = new Map(this.#changes);
-    for (const path of paths) {
-      const change = next.get(path);
-      if (!change) continue;
-      if (!change.working) next.delete(path);
-      else next.set(path, { working: change.working });
-    }
-    this.#commit(next);
-  }
-
   /** Post-commit cleanup that respects edits made while the commit RPC was in
    * flight: a slot is cleared only while it still equals the entry that was
    * committed; anything newer survives (and migrates to the new HEAD's store). */
@@ -108,12 +96,15 @@ class WorkingTreeStore {
     for (const [path, entry] of committed) {
       const change = next.get(path);
       if (!change) continue;
-      const working =
-        change.working && entriesEqual(change.working, entry) ? undefined : change.working;
+      const workingCommitted = change.working && entriesEqual(change.working, entry);
+      const working = workingCommitted ? undefined : change.working;
+      // a commit of the live edit covers an older staged snapshot of the same path
       const staged =
-        change.staged && entriesEqual(change.staged, entry) ? undefined : change.staged;
-      if (!working && !staged) next.delete(path);
-      else next.set(path, { working, staged });
+        workingCommitted || (change.staged && entriesEqual(change.staged, entry))
+          ? undefined
+          : change.staged;
+      if (working || staged) next.set(path, { working, staged });
+      else next.delete(path);
     }
     this.#commit(next);
   }
@@ -136,8 +127,9 @@ class WorkingTreeStore {
   #patch(path: string, update: (change: FileChange) => FileChange): void {
     const next = new Map(this.#changes);
     const updated = update(next.get(path) ?? {});
-    if (!updated.working && !updated.staged) next.delete(path);
-    else next.set(path, { working: updated.working, staged: updated.staged });
+    if (updated.working || updated.staged)
+      next.set(path, { working: updated.working, staged: updated.staged });
+    else next.delete(path);
     this.#commit(next);
   }
 
@@ -226,19 +218,23 @@ export function commitPlan(changes: WorkingTreeChanges): {
   mode: "staged" | "everything";
   paths: string[];
   fileChanges: RepoFileChange[];
+  /** What each path was sent as, for `clearCommitted` once the commit lands. */
+  entries: Map<string, FileEntry>;
 } {
   const staged = [...changes].filter(([, change]) => change.staged);
   const pick = staged.length > 0 ? staged : [...changes];
   const mode = staged.length > 0 ? ("staged" as const) : ("everything" as const);
   const fileChanges: RepoFileChange[] = [];
   const paths: string[] = [];
+  const entries = new Map<string, FileEntry>();
   for (const [path, change] of pick) {
     const entry = mode === "staged" ? change.staged : effectiveEntry(change);
     if (!entry) continue;
     paths.push(path);
+    entries.set(path, entry);
     fileChanges.push(fileChangeForEntry(path, entry));
   }
-  return { mode, paths, fileChanges };
+  return { mode, paths, fileChanges, entries };
 }
 
 function persist(key: string, changes: WorkingTreeChanges): void {

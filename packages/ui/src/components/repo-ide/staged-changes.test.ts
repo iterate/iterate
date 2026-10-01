@@ -112,7 +112,7 @@ test("commitPlan takes staged snapshots when anything is staged, else everything
   });
 });
 
-test("clearStaged drops committed snapshots but keeps live edits", () => {
+test("clearCommitted after a staged commit drops the snapshot and keeps live edits", () => {
   using fixture = storageFixture();
   const store = fixture.store("oid-1");
 
@@ -121,10 +121,39 @@ test("clearStaged drops committed snapshots but keeps live edits", () => {
   store.setWorking("committed.ts", write("v2"));
   store.setWorking("untouched.ts", write("keep"));
 
-  store.clearStaged(["committed.ts"]);
+  store.clearCommitted(commitPlan(store.changes).entries);
   expect(store.changes.get("committed.ts")).toMatchObject({ working: { content: "v2" } });
   expect(store.changes.get("committed.ts")!.staged).toBeUndefined();
   expect(store.changes.get("untouched.ts")).toMatchObject({ working: { content: "keep" } });
+});
+
+test("clearCommitted after an everything commit keeps a file made while it was in flight", () => {
+  using fixture = storageFixture();
+  const store = fixture.store("oid-1");
+
+  store.setWorking("sent.ts", write("v1"));
+  const plan = commitPlan(store.changes);
+  // typed between the commit going out and its answer
+  store.setWorking("sent.ts", write("v2"));
+  store.setWorking("new-during-flight.ts", write("fresh"));
+
+  store.clearCommitted(plan.entries);
+  expect(store.changes.get("sent.ts")).toMatchObject({ working: { content: "v2" } });
+  expect(store.changes.get("new-during-flight.ts")).toMatchObject({
+    working: { content: "fresh" },
+  });
+});
+
+test("clearCommitted drops an older staged snapshot when the live edit is what was sent", () => {
+  using fixture = storageFixture();
+  const store = fixture.store("oid-1");
+
+  store.setWorking("a.ts", write("staged"));
+  store.stage("a.ts");
+  store.setWorking("a.ts", write("live"));
+  // staged and live differ, nothing else changed: the plan sends the staged one
+  store.clearCommitted(new Map([["a.ts", write("live")]]));
+  expect(store.changes.has("a.ts")).toBe(false);
 });
 
 test("clearCommitted keeps slots that changed while the commit was in flight", () => {
