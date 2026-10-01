@@ -30,9 +30,9 @@ the preview's e2e rows and browser specs, which now name the Default preset.
   under the reference `github:iterate/iterate#<sha>&path:configs/<name>`. That tooling, and the
   "which pkg.pr.new build is this checkout's" logic it needs (`published-package-commit.ts`), live
   outside core, in `scripts/os/`.
-- **The dash** offers the presets the platform lists, `default` among them, and preselects the one
-  whose folder is `default` when there is one. Its empty choice is now "Blank" (the minimal
-  config). `?template=<name>` still picks a preset by folder name.
+- **The dash**'s first template option stands for the preset whose folder is `default` (labelled
+  with its name, sending its reference on create, not listed again), else "Blank" (the minimal
+  config) (Misha's review suggestion). `?template=<name>` still picks a preset by folder name.
 - **The consent page** (core's, where an app's first connection creates a person's project) does
   the same: the preset whose folder is `default` when the build has one, else the minimal config.
   Without this, prd's signups through an app would start bare. Core names a folder, not agents.
