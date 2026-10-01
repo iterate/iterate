@@ -17,8 +17,8 @@ import { HttpAnswerError } from "iterate/platform-retry";
  * (docs/ci-traces.md); which repository's run uploaded it doesn't matter, as everyone Access lets
  * in may read every repository's (worker.ts).
  *
- * Misha's viewer from the iterate/config project (`apps/depot/artifact.ts`, #2681 and #2690), itself
- * adapted from artifact.ci's resolve-filepath.ts and build-file-response.ts
+ * Misha's viewer from the iterate/config project (`apps/depot/artifact.ts`), itself adapted from
+ * artifact.ci's resolve-filepath.ts and build-file-response.ts
  * (https://github.com/mmkal/artifact.ci/tree/main/packages/domain/src/artifact). That viewer gave
  * each artifact its own origin under the platform's `*.iterate.app` wildcard; this Worker has one
  * workers.dev origin, so each artifact gets a path, and its CSP confines the page to that path.

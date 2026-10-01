@@ -20,7 +20,10 @@ const TRACED_WORKFLOWS = ["preview-os.yml", "main-os-e2e.yml"];
 export default class CiTrace {
   #depot: DepotApi | undefined;
 
-  /** Collect the jobs this `trace` job needs, in the workflow run it belongs to. */
+  /** Collect the jobs this `trace` job needs, in the workflow run it belongs to. The Depot
+   *  organization token CI telemetry uses (Doppler _shared/preview) reads the workflow and its jobs'
+   *  logs, of which only `@@ci-trace` lines are kept; the job's GITHUB_TOKEN reads the workflow file
+   *  at the traced commit. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
     const workflowId = z

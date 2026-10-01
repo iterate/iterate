@@ -505,9 +505,7 @@ jobs:
         run: echo "CI_TRACE_STATUS_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
       - name: Setup
         uses: ./.depot/actions/setup
-      # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow
-      # and its jobs' logs; only `@@ci-trace` lines are kept. The job's token reads the workflow file
-      # at the traced commit from GitHub.
+      # Which tokens read what: scripts/ci/tracing/cli.ts `current`.
       - name: Collect the trace
         id: trace
         timeout-minutes: 5
