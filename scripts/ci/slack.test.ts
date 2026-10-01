@@ -1,5 +1,6 @@
 // The page primitives over a fake Slack. The token lookup and the WebClient itself are out of scope.
 import { expect, test, vi } from "vitest";
+import { DASHBOARD_EVENT, PAGE_CLOSED_EVENT } from "./dashboard.ts";
 import { fakeSlack } from "./fake-slack.ts";
 import {
   cutText,
@@ -206,6 +207,7 @@ test.for([
       ts: page.ts,
       text: page.text,
       why: "back under 2",
+      now: new Date(now),
     }).then(
       () => "resolved",
       (error: Error) => error.message,
@@ -231,7 +233,7 @@ const goneRows = [...PAGE_GONE_ERRORS].map((error) => ({
 }));
 
 test.for(goneRows)(
-  "resolvePage: a page Slack answers $error to is closed by a reply naming no one when it is still there, and left alone when deleted",
+  "resolvePage: a page Slack answers $error to is closed by a reply in today's dashboard thread naming no one when it is still there, and left alone when deleted",
   async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, {
@@ -243,19 +245,16 @@ test.for(goneRows)(
       ts: page.ts,
       text: page.text,
       why: "back under 2",
+      now: new Date(now),
     });
-    expect(writes(slack).slice(1)).toEqual(
+    expect(shape(slack)).toEqual(
       frozen
         ? [
-            {
-              method: "chat.postMessage",
-              channel: errorPulse,
-              thread_ts: page.ts,
-              reply_broadcast: true,
-              text: "✅ resolved: back under 2",
-            },
+            `:rotating_light: page ${MENTIONS}`,
+            "📟 error-pulse · Tue 22 Sep · 12:00 UTC",
+            `  ↳ ✅ resolved: back under 2 (closes ${page.ts})`,
           ]
-        : [],
+        : [`:rotating_light: page ${MENTIONS}`],
     );
     expect(warn).toHaveBeenCalledWith(
       JSON.stringify({ event: "slack.page-gone", channel: errorPulse, ts: page.ts, reason: error }),
@@ -273,12 +272,13 @@ test("resolvePage: a deleted page gets nothing in its place", async () => {
     ts: page.ts,
     text: page.text,
     why: "back under 2",
+    now: new Date(now),
   });
   expect(slack.channel("#error-pulse")).toEqual([]);
 });
 
 test.for(goneRows)(
-  "keepPage: an open page Slack answers $error to is posted again, and closed naming no one when it is still there",
+  "keepPage: an open page Slack answers $error to is posted again in today's dashboard thread, and closed naming no one when it is still there",
   async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const page = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
@@ -292,25 +292,16 @@ test.for(goneRows)(
         now: new Date(now),
         render: async () => `🚨 sweep: stuck n=2 ${MENTIONS}`,
         why: "gone",
+        broadcast: false,
       }),
     ).resolves.toBe("edit");
-    expect(writes(slack)).toEqual([
-      {
-        method: "chat.update",
-        channel: errorPulse,
-        ts: page.ts,
-        text: `🚨 sweep: stuck n=2 ${MENTIONS}`,
-      },
-      { method: "chat.postMessage", channel: errorPulse, text: `🚨 sweep: stuck n=2 ${MENTIONS}` },
+    expect(shape(slack)).toEqual([
+      `:rotating_light: sweep: stuck n=1 ${MENTIONS}`,
+      "📟 error-pulse · Tue 22 Sep · 12:00 UTC",
+      `  ↳ 🚨 sweep: stuck n=2 ${MENTIONS}`,
       ...(frozen
         ? [
-            {
-              method: "chat.postMessage",
-              channel: errorPulse,
-              thread_ts: page.ts,
-              reply_broadcast: true,
-              text: "✅ resolved: this page moved to a new message, which Slack lets this bot edit",
-            },
+            `  ↳ ✅ resolved: this page moved to a new message, which Slack lets this bot edit (closes ${page.ts})`,
           ]
         : []),
     ]);
@@ -336,9 +327,10 @@ test.for(goneRows)(
         now: new Date(now),
         render: async () => undefined,
         why: "the sweep succeeded",
+        broadcast: false,
       }),
     ).resolves.toBe("resolve");
-    expect(writes(slack)).toEqual([
+    expect(writes(slack).filter((call) => !isDashboardPost(call))).toEqual([
       {
         method: "chat.update",
         channel: errorPulse,
@@ -347,13 +339,11 @@ test.for(goneRows)(
       },
       ...(frozen
         ? [
-            {
+            expect.objectContaining({
               method: "chat.postMessage",
-              channel: errorPulse,
-              thread_ts: older.ts,
-              reply_broadcast: true,
               text: "✅ resolved: a newer page follows this incident",
-            },
+              metadata: { event_type: "error_pulse_page_closed", event_payload: { ts: older.ts } },
+            }),
           ]
         : []),
       {
@@ -404,6 +394,7 @@ test.for([
       sinceHours: 720,
       now: new Date(now),
       why: "the sweep succeeded",
+      broadcast: false,
     };
     const steps = [];
     for (const present of renders)
@@ -439,6 +430,7 @@ test("keepPage: any other error from Slack's edit throws", async () => {
       now: new Date(now),
       render: async () => `🚨 sweep: stuck n=2 ${MENTIONS}`,
       why: "gone",
+      broadcast: false,
     }),
   ).rejects.toThrow("An API error occurred: fatal_error");
   expect(writes(slack).map((call) => call.method)).toEqual(["chat.update"]);
@@ -473,14 +465,16 @@ test("keepPage: one incident over five nights is posted, edited twice, resolved 
             })
           : undefined,
       why: "Cloudflare deleted them",
+      broadcast: false,
     });
   const steps = [];
   for (const ids of [["• a"], ["• a"], ["• a", "• b"], [], []]) steps.push(await night(ids));
   expect({ steps, writes: writes(slack).map((call) => call.method) }).toEqual({
+    // the dashboard, then the page in its thread
     steps: ["post", "edit", "edit", "resolve", "none"],
-    writes: ["chat.postMessage", "chat.update", "chat.update", "chat.update"],
+    writes: ["chat.postMessage", "chat.postMessage", "chat.update", "chat.update", "chat.update"],
   });
-  const [page] = slack.channel("#error-pulse");
+  const [page] = slack.channel("#error-pulse")[0]!.replies;
   expect(writes(slack).at(-1)).toEqual({
     method: "chat.update",
     channel: errorPulse,
@@ -504,6 +498,7 @@ test("keepPage: older open pages of the incident are resolved by an edit alone, 
       now: new Date(now),
       render: async () => `🚨 sweep: stuck n=3 ${MENTIONS}`,
       why: "gone",
+      broadcast: false,
     }),
   ).resolves.toBe("edit");
   expect(writes(slack)).toEqual([
@@ -538,6 +533,7 @@ test("keepPage renders from the open page's text: what it named and this run did
         return `🚨 sweep: stuck\n• a\n• b ${MENTIONS}`;
       },
       why: "gone",
+      broadcast: false,
     }),
   ).resolves.toBe("edit");
   expect({ seen, writes: writes(slack) }).toEqual({
@@ -556,4 +552,23 @@ test("keepPage renders from the open page's text: what it named and this run did
 /** The Slack writes a run made: every call but the reads. */
 function writes(slack: ReturnType<typeof fakeSlack>) {
   return slack.calls.filter((call) => call.method.startsWith("chat."));
+}
+
+/** Whether a call posted a dashboard (./dashboard.ts), which the first page of a day brings. */
+function isDashboardPost(call: { method: string; metadata?: { event_type: string } }) {
+  return call.method === "chat.postMessage" && call.metadata?.event_type === DASHBOARD_EVENT;
+}
+
+/** #error-pulse as a reader sees it: each message's first line, a reply indented under its thread,
+ *  and a reply that closes a page by its metadata naming the page's ts. */
+function shape(slack: ReturnType<typeof fakeSlack>) {
+  return slack
+    .channel("#error-pulse")
+    .flatMap((message) => [
+      message.text.split("\n")[0],
+      ...message.replies.map(
+        (reply) =>
+          `  ↳ ${reply.text.split("\n")[0]}${reply.metadata?.event_type === PAGE_CLOSED_EVENT ? ` (closes ${String(reply.metadata.event_payload.ts)})` : ""}`,
+      ),
+    ]);
 }
