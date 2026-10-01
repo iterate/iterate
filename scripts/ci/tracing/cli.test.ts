@@ -69,6 +69,7 @@ test("no status is posted until the trace's own artifact is in Depot", async () 
 
 test("the trace job collects the deploy and both test jobs, in the order it names them", async () => {
   await using depot = await tracedWorkflow({
+    repo: "iterate/iterate",
     workflowName: "Preview OS",
     workflowPath: "preview-os.yml",
     // as Depot happens to list them
@@ -101,6 +102,7 @@ test("the trace job collects the deploy and both test jobs, in the order it name
 
 test("on main, the trace covers the deploy and both test jobs while alert still runs", async () => {
   await using depot = await tracedWorkflow({
+    repo: "iterate/iterate",
     workflowName: "Main OS e2e",
     workflowPath: "main-os-e2e.yml",
     jobs: [
@@ -127,6 +129,26 @@ test("on main, the trace covers the deploy and both test jobs while alert still 
       { key: "ci.time_to_green_ms", value: { stringValue: "240000" } },
     ]),
   });
+});
+
+test("a private repository's run is traced from the workflow file GitHub serves the job's token", async () => {
+  await using depot = await tracedWorkflow({
+    repo: "iterate/private",
+    workflowName: "Preview OS",
+    workflowPath: "preview-os.yml",
+    jobs: [
+      ["deploy", "finished", 3, 40],
+      ["e2e", "finished", 41, 180],
+      ["specs", "finished", 41, 120],
+      ["trace", "running", 181, 0],
+    ],
+    needs: ["deploy", "e2e", "specs"],
+  });
+
+  await new CiTrace().current(depot.directory);
+
+  const trace = JSON.parse(await readFile(join(depot.directory, "trace.json"), "utf8"));
+  expect(trace.resourceSpans[0].scopeSpans[0].spans[0]).toMatchObject({ name: "Preview OS" });
 });
 
 test.for([
@@ -180,6 +202,7 @@ async function collectedTrace(
   });
   vi.stubGlobal("fetch", fetch);
   vi.stubEnv("CI_TRACE_STATUS_SHA", "a".repeat(40));
+  vi.stubEnv("GITHUB_REPOSITORY", "iterate/iterate");
   vi.stubEnv("GITHUB_TOKEN", "token");
   const doppler = fakeDoppler({ secrets: { DEPOT_CI_TELEMETRY_TOKEN: "token" } });
   vi.stubEnv("DEPOT_JOB_URL", "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a");
@@ -201,11 +224,12 @@ async function collectedTrace(
 }
 
 /**
- * Depot and GitHub as a trace job sees them: a workflow whose `jobs` ([key, status, started and
- * finished seconds]) include this trace job, still running, the e2e job's marker lines, and the
- * workflow source, whose trace job `needs`.
+ * Depot and GitHub as a trace job in `repo` sees them: a workflow whose `jobs` ([key, status,
+ * started and finished seconds]) include this trace job, still running, the e2e job's marker lines,
+ * and the workflow source, whose trace job `needs`, which GitHub serves only with the job's token.
  */
 async function tracedWorkflow(workflow: {
+  repo: string;
   workflowName: string;
   workflowPath: string;
   jobs: [key: string, status: string, startedAt: number, finishedAt: number][];
@@ -243,7 +267,7 @@ async function tracedWorkflow(workflow: {
       workflowId: "workflow",
       workflowName: workflow.workflowName,
       workflowPath: workflow.workflowPath,
-      repo: "iterate/iterate",
+      repo: workflow.repo,
       headSha: "head",
       sha: "merge",
       ref: "refs/pull/2898/merge",
@@ -264,23 +288,30 @@ async function tracedWorkflow(workflow: {
       ],
     },
   };
-  const fetch = vi.fn(async (url: string, init?: { body?: string }) => {
-    if (url.startsWith("https://raw.githubusercontent.com/"))
-      return new Response(
-        stringify({
-          jobs: {
-            e2e: { steps: [{ id: "suite", run: "doppler run -- pnpm preview e2e" }] },
-            trace: { needs: workflow.needs, steps: [] },
-          },
-        }),
-      );
-    const method = url.split("/").at(-1)!;
-    const attemptId = (JSON.parse(init?.body || "{}") as { attemptId?: string }).attemptId;
-    const body = responses[attemptId ? `${method}:${attemptId}` : method] || { lines: [] };
-    return new Response(JSON.stringify(body));
-  });
+  const source = `https://api.github.com/repos/${workflow.repo}/contents/.depot%2Fworkflows%2F${workflow.workflowPath}?ref=merge`;
+  const fetch = vi.fn(
+    async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+      if (url.startsWith("https://api.github.com/"))
+        return url === source && init?.headers?.authorization === "token job-token"
+          ? new Response(
+              stringify({
+                jobs: {
+                  e2e: { steps: [{ id: "suite", run: "doppler run -- pnpm preview e2e" }] },
+                  trace: { needs: workflow.needs, steps: [] },
+                },
+              }),
+            )
+          : Response.json({ message: "Not Found" }, { status: 404 });
+      const method = url.split("/").at(-1)!;
+      const attemptId = (JSON.parse(init?.body || "{}") as { attemptId?: string }).attemptId;
+      const body = responses[attemptId ? `${method}:${attemptId}` : method] || { lines: [] };
+      return new Response(JSON.stringify(body));
+    },
+  );
   vi.stubGlobal("fetch", fetch);
   const doppler = fakeDoppler({ secrets: { DEPOT_CI_TELEMETRY_TOKEN: "token" } });
+  vi.stubEnv("GITHUB_REPOSITORY", workflow.repo);
+  vi.stubEnv("GITHUB_TOKEN", "job-token");
   vi.stubEnv("GITHUB_OUTPUT", "");
   vi.stubEnv(
     "DEPOT_JOB_URL",

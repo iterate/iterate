@@ -3,7 +3,7 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { ciReportsEnvs } from "../../../envs.ts";
 import { depotApi, type DepotApi } from "../depot.ts";
-import { getOctokit } from "../github.ts";
+import { fileAtCommit, getOctokit, getRepo, githubRepository } from "../github.ts";
 import {
   assembleTrace,
   jobKeyInWorkflow,
@@ -37,6 +37,7 @@ export default class CiTrace {
 
   private async write(workflowId: string, directory: string) {
     const workflow = Workflow.parse(await this.depot("GetWorkflow", { workflowId }));
+    const repository = githubRepository();
     if (workflow.repo !== repository || !TRACED_WORKFLOWS.includes(workflow.workflowPath))
       throw new Error(`Only ${TRACED_WORKFLOWS.join(" and ")} runs of ${repository} are traced`);
     const report = await this.collect(workflow);
@@ -58,12 +59,12 @@ export default class CiTrace {
   }
 
   private async collect(workflow: z.infer<typeof Workflow>) {
-    const source = await fetch(
-      `https://raw.githubusercontent.com/${repository}/${workflow.sha}/.depot/workflows/${workflow.workflowPath}`,
-      { signal: AbortSignal.timeout(30_000) },
-    );
-    if (!source.ok) throw new Error(`Could not read the source workflow: HTTP ${source.status}`);
-    const yaml = await source.text();
+    const yaml = await fileAtCommit(getOctokit(), {
+      sha: workflow.sha,
+      path: `.depot/workflows/${workflow.workflowPath}`,
+    });
+    if (!yaml)
+      throw new Error(`GitHub has no .depot/workflows/${workflow.workflowPath} at ${workflow.sha}`);
     const commands = stepCommands(yaml);
     const traced = tracedJobs(yaml);
     // Main's delete and alert run beside the trace job, so the trace covers only what it waited for,
@@ -176,12 +177,7 @@ export default class CiTrace {
         target_url: reportUrl(playwright.artifactId),
       });
     for (const status of statuses)
-      await getOctokit().rest.repos.createCommitStatus({
-        owner: "iterate",
-        repo: "iterate",
-        sha,
-        ...status,
-      });
+      await getOctokit().rest.repos.createCommitStatus({ ...getRepo(), sha, ...status });
     return statuses;
   }
 
@@ -191,8 +187,6 @@ export default class CiTrace {
     return this.#depot(method, body);
   }
 }
-
-const repository = "iterate/iterate";
 
 /** The trace job uploads its report under this name; `public-` lets the ci-reports viewer serve it. */
 function traceArtifactName(workflowId: string, executionId: string) {

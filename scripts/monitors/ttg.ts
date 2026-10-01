@@ -38,6 +38,7 @@
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { mapConcurrent, workflowArtifact, type DepotApi } from "../ci/depot.ts";
+import { githubRepository } from "../ci/github.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
 import { decide, type PageUpdate } from "./page.ts";
 
@@ -410,15 +411,16 @@ export async function checkTtg(input: {
   } as const;
 }
 
-/** Every PR run created since `since`, newest first, whatever its status: Depot's `ListRuns` pages
- *  back from the newest (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto).
- *  A closed PR's run has its merge commit for a ref and is left out. */
+/** Every PR run of this repository created since `since`, newest first, whatever its status:
+ *  Depot's `ListRuns` pages back from the newest
+ *  (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto). A closed PR's run has its
+ *  merge commit for a ref and is left out. */
 async function listPullRequestRuns(depot: DepotApi, since: number) {
   const runs: z.infer<typeof RunPage>["runs"] = [];
   for (let pageToken = ""; ;) {
     const page = RunPage.parse(
       await depot("ListRuns", {
-        repo: "iterate/iterate",
+        repo: githubRepository(),
         trigger: "pull_request",
         status: ["queued", "running", "finished", "failed", "cancelled"],
         pageSize: 100,

@@ -43,7 +43,7 @@ import {
   workflowsInProgress,
   type DepotApi,
 } from "../ci/depot.ts";
-import { getOctokit } from "../ci/github.ts";
+import { getOctokit, getRepo } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import {
   escalationText,
@@ -464,9 +464,7 @@ function commitSubjects() {
     const known = subjects.get(sha);
     if (known) return known;
     const subject = Promise.resolve()
-      .then(() =>
-        getOctokit().rest.repos.getCommit({ owner: "iterate", repo: "iterate", ref: sha }),
-      )
+      .then(() => getOctokit().rest.repos.getCommit({ ...getRepo(), ref: sha }))
       .then(({ data }) => data.commit.message.split("\n", 1)[0]!)
       .catch((error: unknown) => {
         console.warn(`[health] no subject for ${sha}: ${String(error)}`);

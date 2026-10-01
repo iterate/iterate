@@ -122,11 +122,12 @@ main's keeps.
 
 ## Replay
 
-The script reads the Depot organization token from Doppler `_shared/preview`, as in CI. Use the
-Depot workflow ID, not its run ID.
+The script reads the Depot organization token from Doppler `_shared/preview`, as in CI, and the
+workflow file at the traced commit from GitHub with `GITHUB_TOKEN`. Use the Depot workflow ID, not
+its run ID.
 
 ```sh
-node scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
+GITHUB_TOKEN="$(gh auth token)" node scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
 ```
 
 ## Timing limits

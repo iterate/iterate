@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { DEPOT_ORG, depotCiApi } from "@iterate-com/shared/depot-api";
 import { dopplerSecret } from "../lib/env-context.ts";
+import { githubRepository } from "./github.ts";
 
 /** `operation` over `inputs`, at most `concurrency` at a time, outputs in input order: how the
  *  telemetry sync and PR time to green fan out their per-run Depot calls, and the flake dashboard
@@ -63,10 +64,10 @@ const ListedWorkflows = z.object({
 export type SettledWorkflow = z.infer<typeof ListedWorkflows>["workflows"][number];
 
 /**
- * The workflows named `name` (its `name:`) that one of `triggers` started and that settled, finished
- * or failed, created after `after`, oldest first. A cancelled one is left out: Depot cancels a
- * queued push that a newer one replaced, and a person cancels by hand. It reads the newest 50 of the
- * name, dispatches included: ListWorkflows has no paging
+ * This repository's workflows (github.ts getRepo) named `name` (its `name:`) that one of `triggers`
+ * started and that settled, finished or failed, created after `after`, oldest first. A cancelled
+ * one is left out: Depot cancels a queued push that a newer one replaced, and a person cancels by
+ * hand. It reads the newest 50 of the name, dispatches included: ListWorkflows has no paging
  * (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto).
  */
 export async function settledWorkflows(
@@ -75,7 +76,7 @@ export async function settledWorkflows(
 ) {
   const { workflows } = ListedWorkflows.parse(
     await depot("ListWorkflows", {
-      repo: "iterate/iterate",
+      repo: githubRepository(),
       name: input.name,
       status: ["finished", "failed"],
       pageSize: 50,
@@ -90,12 +91,12 @@ export async function settledWorkflows(
     .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-/** The workflows named `name` (its `name:`) still in progress, queued or running, whatever started
- *  them, oldest first. The newest 50 of the name, as settledWorkflows reads. */
+/** This repository's workflows named `name` (its `name:`) still in progress, queued or running,
+ *  whatever started them, oldest first. The newest 50 of the name, as settledWorkflows reads. */
 export async function workflowsInProgress(depot: DepotApi, input: { name: string }) {
   const { workflows } = ListedWorkflows.parse(
     await depot("ListWorkflows", {
-      repo: "iterate/iterate",
+      repo: githubRepository(),
       name: input.name,
       status: ["queued", "running"],
       pageSize: 50,
@@ -133,10 +134,10 @@ export async function workflowArtifact(
 }
 
 /**
- * `file` inside the newest `artifact` a running, finished or failed run of `workflow` (its `name:`)
- * uploaded, as text — how a job hands its state to its next run (the health job's memory) — or
- * undefined when none of its last 20 runs kept one. A failed run counts: a job that keeps its state
- * before it fails still handed it on. A running one counts too: a state it kept is its first
+ * `file` inside the newest `artifact` a running, finished or failed run of this repository's
+ * `workflow` (its `name:`) uploaded, as text — how a job hands its state to its next run (the
+ * health job's memory) — or undefined when none of its last 20 runs kept one. A failed run counts:
+ * a job that keeps its state before it fails still handed it on. A running one counts too: a state it kept is its first
  * execution's, so a re-run's job reads that instead of the state of the run before it, and judges
  * nothing twice (a job that keeps state runs after the runs before it have ended: the Health
  * workflow's runs one at a time, Main OS e2e's page jobs in turn).
@@ -147,7 +148,7 @@ export async function newestArtifactFile(
 ) {
   const { workflows } = ListedWorkflows.parse(
     await depot("ListWorkflows", {
-      repo: "iterate/iterate",
+      repo: githubRepository(),
       name: input.workflow,
       status: ["running", "finished", "failed"],
       pageSize: 20,
