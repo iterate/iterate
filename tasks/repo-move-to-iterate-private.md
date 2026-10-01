@@ -12,8 +12,8 @@ restart). These changes land on iterate/iterate first and behave the same there 
 Status: built; PR #3507 green before the Access commits. Done: Depot and GitHub calls name the
 running repository, workflow YAML read with the job's token, release without tags, Copybara's
 per-run origin and re-seed (tested against the real jar), the MCP examples in core, and ci-reports
-behind Cloudflare Access in code. Left: creating the `ci-reports` Access application (needs Misha's
-OK: it gates the live viewer at once), and at the cutover a GitHub token for private explainers.
+behind Cloudflare Access, its application created and checked. Left: CI on the latest push, and at
+the cutover a GitHub token for private explainers.
 
 Out of scope: package URLs (`tasks/package-urls-survive-repo-move.md`, in Misha's root checkout),
 kit firmware (its own repo later).
@@ -79,8 +79,9 @@ kit firmware (its own repo later).
       for Misha _(below)_
 - [x] ci-reports behind Cloudflare Access _(Misha's choice; `src/worker.ts` gate and test, no repo
       check, deploy smoke, `vite dev` identity, docs)_
-- [ ] create the `ci-reports` Access application (worker destination, allow `nustom.com`), with
-      Misha's OK
+- [x] create the `ci-reports` Access application (worker destination, allow `nustom.com`), with
+      Misha's OK _(2026-10-01, app `37aa685f-1a68-454c-abb2-1a3529dc6749`; `/`, an artifact path, an
+      explainer and a version preview URL each 302 to Access's sign-in)_
 - [ ] at the cutover: explainers read iterate/private with a GitHub token (`explainer.ts` reads
       iterate/iterate anonymously until then)
 - [x] MCP example in `core/os/examples/`, link, e2e, `core/os/README.md` _(`mcp-run-scripts.mjs`)_
