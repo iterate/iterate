@@ -5,9 +5,9 @@ size: large
 
 # #error-pulse: fewer pings, one daily dashboard
 
-Status: PR 1 (stop the worst noise) in progress: fault alarm, silent resolutions and the iterate.com
-site are done; the health signals are being finished. PR 2 (the daily dashboard) not started. The
-iterate.com site fix is live (config repo commit 528dc1b).
+Status: PR 1 (stop the worst noise, #3502) is done and in review; only the one-off cleanup of stale
+pages waits on Misha. PR 2 (the daily dashboard) is stacked on it. The iterate.com site fix is live
+(config repo commit 528dc1b).
 
 ## Why
 
@@ -65,13 +65,16 @@ Assumptions (mine, not Misha's; flag if wrong):
       _`isSiteSubdomain`; docs.iterate.com is a real name the site serves and lands in the group
       too, named in its hosts_
 - [x] fault alarm: 5xx and request-line errors on scanner paths are dropped _`isScannerPath`_
-- [ ] fault alarm, health, do-cost, notify: escalation replies are not sent to the channel
-- [ ] every poster: resolving edits the page and mentions nobody (slack.ts `resolvePage`, health.ts
-      `sendUpdates`, do-cost, notify) _slack.ts done: `resolvedPageText`, no reply; a deleted page
-      gets nothing_
-- [ ] health: main e2e and slow e2e rows red at the same commit share one page
-- [ ] health: PR time to green pages only past its line by more than 10%
-- [ ] docs/depot-ci.md "Slack channels" and "Health" say what changed
+- [x] fault alarm, health, do-cost, notify: escalation replies are not sent to the channel
+      _`PageUpdate` has no `broadcast`; notify's was already thread-only_
+- [x] every poster: resolving edits the page and mentions nobody (slack.ts `resolvePage`, health.ts
+      `sendUpdates`, do-cost, notify) _`resolvedPageText`, no reply; a deleted page gets nothing; a
+      health page Slack can no longer edit leaves the state with nothing sent_
+- [x] health: main e2e and slow e2e rows red at the same commit share one page _e2e.ts
+      `heldOnMainPage`: slow rows' red updates wait while main e2e is red_
+- [x] health: PR time to green pages only past its line by more than 10% _ttg.ts `LINES.margin`,
+      `judge(summary, paged)`; resolves under the plain line_
+- [x] docs/depot-ci.md "Slack channels" and "Health" say what changed
 - [ ] once merged (needs Misha's yes): edit the 34 stale 🚨 pages to ✅ resolved, no replies
 
 ## PR 2: the daily dashboard (stacked on PR 1)
