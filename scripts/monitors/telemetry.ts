@@ -348,7 +348,7 @@ export function judgeTelemetry(input: {
   // red and green are this signal's only states, so `replace` (red ↔ unjudged) never comes
   const update: PageUpdate =
     action === "escalate"
-      ? { signal, kind: action, page, news: `new: ${news.join("; ")}`, broadcast: false }
+      ? { signal, kind: action, page, news: `new: ${news.join("; ")}` }
       : { signal, kind: action === "edit" ? "edit" : "post", page };
   return { memory, update };
 }
