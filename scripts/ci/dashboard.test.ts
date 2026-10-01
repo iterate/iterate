@@ -1,7 +1,7 @@
 // #error-pulse's daily dashboard over a fake Slack: today's message, its rows, and the pages from
 // before it. Pages in its thread are ./slack.test.ts's.
 import { expect, test } from "vitest";
-import { legacyPages, renderDashboard, setRow, todaysDashboard } from "./dashboard.ts";
+import { renderDashboard, setRow, todaysDashboard } from "./dashboard.ts";
 import { fakeSlack } from "./fake-slack.ts";
 import { findOpenPages, keepPage, slackChannelIds } from "./slack.ts";
 
@@ -176,33 +176,6 @@ test("a page kept in the dashboard's thread is found open by the next run, and r
     page: "✅ resolved: preview sweep: stuck n=2\n✅ deleted",
     open: [],
     dashboards: 1,
-  });
-});
-
-test("the 🚨 pages from before the dashboard are listed, oldest first, and edited resolved when asked", async () => {
-  const slack = fakeSlack({ now: Date.parse("2026-10-01T16:00:00Z") });
-  const channel = slackChannelIds["#error-pulse"];
-  slack.seed("#error-pulse", "🚨 prd fault page: 11:50–12:05 UTC <@U1>", { ageHours: 80 });
-  slack.seed("#error-pulse", "✅ resolved: prd: 2 errors <@U1>", { ageHours: 60 });
-  slack.seed("#error-pulse", "🔴 main e2e red at `2eb7238e8`", { ageHours: 50 });
-  slack.seed("#error-pulse", "🚨 someone else's page", { ageHours: 40, botId: "B0OTHER" });
-  const now = new Date(slack.clock.now);
-  const listed = await legacyPages(slack.client, { channel, sinceDays: 30, now, resolve: false });
-  await legacyPages(slack.client, { channel, sinceDays: 30, now, resolve: true });
-  expect({
-    listed: listed.map((line) => line.split(" ").slice(1).join(" ")),
-    channel: slack.channel("#error-pulse").map((message) => message.text),
-  }).toEqual({
-    listed: [
-      ":rotating_light: prd fault page: 11:50–12:05 UTC <@U1>",
-      ":red_circle: main e2e red at `2eb7238e8`",
-    ],
-    channel: [
-      "✅ resolved: prd fault page: 11:50–12:05 UTC <@U1>",
-      "✅ resolved: prd: 2 errors <@U1>",
-      "✅ resolved: main e2e red at `2eb7238e8`",
-      "🚨 someone else's page",
-    ],
   });
 });
 

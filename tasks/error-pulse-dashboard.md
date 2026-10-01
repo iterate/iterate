@@ -149,8 +149,7 @@ Design (from mapping every poster, 2026-10-01):
       an erase_
 - [x] preview sweep, context sweep: rows; preview sweep keeps its page _preview's page logic moved
       to preview-sweep.ts `keepSweepPages`, since preview.ts runs its CLI on import_
-- [x] `dashboard.ts close-legacy-pages`: list the top-level 🚨 pages nothing tracks; `--resolve`
-      edits them resolved (run only with Misha's yes)
+- [ ] ~~`dashboard.ts close-legacy-pages`~~ _dropped (Misha, 2026-10-01): it ran once, by hand, and its job is done_
 - [x] docs/depot-ci.md "Slack channels" rewritten around the dashboard
 - [ ] ~~fold quiet green rows into one line~~ _Misha, 2026-10-01: a line per row is fine for now_
 - [ ] ~~pin the dashboard~~ _Misha, 2026-10-01: no need for a real pin_

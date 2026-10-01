@@ -13,12 +13,9 @@
 // posts it with yesterday's rows, so a signal no poster judged today still shows what it last was.
 // Each poster rewrites only its own row, then reads the message back: Slack has no compare-and-set,
 // and two posters' edits in the same second can drop one's row, which is written again.
-//
-//   node scripts/ci/dashboard.ts close-legacy-pages [--resolve]   # the 🚨 pages from before it
 import type { WebClient } from "@slack/web-api";
-import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { cutText, getSlackClient, markResolved, slackChannelIds } from "./slack.ts";
+import { cutText } from "./slack.ts";
 
 /** The metadata event type of a dashboard, and of a reply that closes a page Slack can no longer
  *  edit (./slack.ts `closeFrozenPage`), its payload naming the page's ts. */
@@ -43,7 +40,7 @@ export type DashboardPayload = z.infer<typeof DashboardPayload>;
 
 /** The rows in the order the dashboard shows them, most urgent first; a signal not listed follows,
  *  by name. */
-export const SIGNALS = [
+const SIGNALS = [
   "prd hosts",
   "prd deploys",
   "prd faults",
@@ -200,56 +197,3 @@ async function readDashboard(
   const message = replies.messages?.find((reply) => reply.ts === input.ts);
   return { ts: input.ts, payload: DashboardPayload.parse(message?.metadata?.event_payload) };
 }
-
-/** The CLI command: the legacy pages of the last `sinceDays` (legacyPages), each line its ts and
- *  first line, edited resolved with `resolve`. */
-export async function closeLegacyPages(options: { resolve?: boolean; sinceDays?: number }) {
-  const pages = await legacyPages(getSlackClient(), {
-    channel: slackChannelIds["#error-pulse"],
-    sinceDays: options.sinceDays || 30,
-    now: new Date(),
-    resolve: Boolean(options.resolve),
-  });
-  return pages.join("\n") || "no legacy pages";
-}
-
-/**
- * The top-level pages this bot posted before the dashboard that still say 🚨 or 🔴, oldest first:
- * a page no poster's state or marker still names (an older format's, a lost state's) never
- * resolves on its own. With `resolve`, each is edited to say it is resolved, which notifies nobody.
- */
-export async function legacyPages(
-  slack: WebClient,
-  input: { channel: string; sinceDays: number; now: Date; resolve: boolean },
-) {
-  const { bot_id: botId } = await slack.auth.test();
-  const oldest = input.now.getTime() / 1000 - input.sinceDays * 86_400;
-  const open: Array<{ ts: string; text: string }> = [];
-  let cursor: string | undefined;
-  do {
-    const history = await slack.conversations.history({
-      channel: input.channel,
-      oldest: String(oldest),
-      limit: 200,
-      cursor,
-    });
-    for (const message of history.messages || []) {
-      const reply = message.thread_ts && message.thread_ts !== message.ts;
-      if (message.bot_id !== botId || reply || !message.ts) continue;
-      if (/^(🚨|:rotating_light:|🔴|:red_circle:)/u.test(message.text || ""))
-        open.push({ ts: message.ts, text: message.text || "" });
-    }
-    cursor = history.response_metadata?.next_cursor || undefined;
-  } while (cursor);
-  open.sort((a, b) => Number(a.ts) - Number(b.ts));
-  if (input.resolve)
-    for (const page of open)
-      await slack.chat.update({
-        channel: input.channel,
-        ts: page.ts,
-        text: markResolved(page.text.replace(/^(🔴|:red_circle:)\s*/u, "🚨 ")),
-      });
-  return open.map((page) => `${page.ts} ${page.text.split("\n")[0]}`);
-}
-
-void createCli(import.meta).run();

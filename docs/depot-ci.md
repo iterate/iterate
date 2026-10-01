@@ -795,9 +795,7 @@ whose metadata names the page (`error_pulse_page_closed`), which later runs read
 deleted page's resolution sends nothing. A poster with no state of its own finds its open pages in
 the dashboards' threads (`findOpenPages`), and in the top-level pages from before the dashboard; a
 run that sees only part of an incident (the preview sweep's stuck namespaces, the apps that failed
-on a commit) carries forward what the open page names. `node scripts/ci/dashboard.ts
-close-legacy-pages` lists the top-level 🚨 pages from before the dashboard, and `--resolve` edits
-them resolved.
+on a commit) carries forward what the open page names.
 
 Only a run on main pages or sets a row; a 🧪 test run (each workflow's `test-run` input, each
 `notify.ts` command's `--test-run`) posts its pages top-level to #ci, mentions nobody and never
