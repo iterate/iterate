@@ -12,6 +12,15 @@ export default class extends IterateConfigEntrypoint {
         // whenever it publishes a commit of this repo, so this case runs again after every commit:
         // keep it idempotent. Only the platform appends this type.
         await installAgents(itx);
+        // A heartbeat, for a project that should wake on its own (to check on itself and repair what
+        // it finds, say): uncommented, it appends `heartbeat` on `/` every five minutes and wakes the
+        // project each time. Set again unchanged, it keeps its clock. Commenting it out again does
+        // not stop it; `itx.schedules.cancel("heartbeat")` does.
+        // await itx.schedules.set({
+        //   key: "heartbeat",
+        //   when: { everyMs: 5 * 60_000 },
+        //   events: [{ type: "heartbeat" }],
+        // });
         return;
       }
       case "events.iterate.com/itx/woken":

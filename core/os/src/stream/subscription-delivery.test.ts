@@ -1953,11 +1953,46 @@ test("fan-out, the wake rule: a wake handler appending work that fails climbs on
     await drainDeliveries();
   }
   expect(current.delivery.deadlines()).toEqual([]);
-  // a lap may start lower (a shallower retry wakes it once deeper ones settle), but each climbs to 8
+  // Later climbs start lower: once the row acks its own `itx/loop-limit` fact (a success, which
+  // lifts its pause), and whenever its last record dead-letters (nothing owed). How often is up to
+  // the ladder's jitter, so the depth is bounded and the number of works is not.
   const depths = factsOf(current, "test/work").map((event) => event.source!.cause!.depth);
   expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   expect(Math.max(...depths)).toBe(8);
-  expect(depths.length).toBeLessThan(20);
+  expect(factsOf(current, "events.iterate.com/itx/loop-limit")).toMatchObject([
+    { payload: { depth: 9 } },
+  ]);
+  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
+});
+
+// The row above with `Math.random` seeded, which the retry ladder's jitter draws from. This draw
+// restarts the climb at depth 2 after the loop-limit ack, and at depth 4 when the last record
+// dead-letters: [1..8, 2..8, 4..8], 20 works, which about 1 unseeded run in 140 reaches.
+test("fan-out, the wake rule, seeded: a jitter draw that restarts the climb twice still stops at 8, goes quiet", async () => {
+  const told: string[] = [];
+  vi.spyOn(Math, "random").mockImplementation(mulberry32(185));
+  let current: ReturnType<typeof incarnation> | undefined;
+  const handler = sink(told, (event) => {
+    if (event.type === WOKEN) current!.stream.append({ type: "test/work" });
+    if (event.type === "test/work") throw new Error("the work fails");
+  });
+  current = incarnation(handler);
+  configure(current, SINK_ROW);
+  await drainDeliveries();
+  current = incarnation(handler, current.storage);
+  await drainDeliveries();
+  fakeClock();
+  for (let laps = 0; laps < 2_000 && current.delivery.deadlines()[0]; laps++) {
+    vi.setSystemTime(current.delivery.deadlines()[0]!.at + 1);
+    current = incarnation(handler, current.storage, { wake: { cause: "alarm", due: ["retry"] } });
+    await drainDeliveries();
+    await current.pass();
+    await drainDeliveries();
+  }
+  expect(current.delivery.deadlines()).toEqual([]);
+  const depths = factsOf(current, "test/work").map((event) => event.source!.cause!.depth);
+  expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  expect(Math.max(...depths)).toBe(8);
   expect(factsOf(current, "events.iterate.com/itx/loop-limit")).toMatchObject([
     { payload: { depth: 9 } },
   ]);
