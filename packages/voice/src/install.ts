@@ -1,9 +1,8 @@
 // install.ts — what a config repo's init case calls (README.md), what Kit's Prepare and the voice
-// app run for a project, and the Voice app's upgrade of the build the config pins. Voice is
-// installed as the agents app is (@iterate-com/agents/install): the config repo depends on this
-// package and re-exports its service and relay class from `voice.ts`, and every rule and row voice
-// writes names that module of the project's published config. Not the runtime, so importing it
-// loads none.
+// app run for a project, and the Voice app's upgrade of the build the config pins. The config repo
+// depends on this package and re-exports its service and relay class from `voice.ts`, and every
+// rule and row voice writes names that module of the project's published config, as the agents
+// app's name `agents.ts` (iterate/agents/install). Not the runtime, so importing it loads none.
 import type {} from "./api.ts"; // registers `itx.voice` on InstalledAppRoots
 import type { FacetSpec, IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
 import { canonicalItxExpressionPrefix, type ItxExpressionInput } from "iterate/expression";
@@ -78,7 +77,7 @@ export async function ensureVoiceAgent(
   // a config repo not created yet, or created but not yet seeded (no tip), is waited for below
   if (!rule?.target && tip && !voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
     throw new Error(
-      `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/default does`,
+      `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/voice does`,
     );
   if (!secrets.some((secret) => secret.path === "/secrets/openai")) {
     if (!openaiKey?.trim()) return "needs-openai-key";
@@ -144,7 +143,7 @@ async function voiceInstalled(
     afterOffset = event.offset;
   }
   throw new Error(
-    "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as configs/default does",
+    "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as configs/voice does",
   );
 }
 
@@ -179,10 +178,12 @@ export async function voiceVersion(project: {
 }
 
 /**
- * Upgrades the project's voice pin to `version` and returns the published commit, following the
- * commit and publication protocol documented by `upgradeAgents` in packages/agents/src/install.ts.
- * A press from 5 s after publication loads the new build (`voiceAgentFacetSpec`); the agents app
- * keeps its separately pinned build.
+ * AN UPGRADE of the project's voice to `version`: the root package.json's pin, committed on the tip
+ * it read (refused if main moved meanwhile; a file already so commits nothing, and the tip's outcome
+ * answers), then that commit's outcome on `/`, past any give-up for now (`unavailable`), which
+ * leaves it owed. Published, a press from 5 s on loads the new build (`voiceAgentFacetSpec`);
+ * refused, main moving on included, it throws why and the person upgrades again. Answers the
+ * commit. The agents app is the platform's own (iterate/agents) and upgrades with it.
  */
 export async function upgradeVoice(
   project: Pick<IterateContextApi, "waitForEvent"> & {

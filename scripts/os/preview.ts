@@ -23,6 +23,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
 import { connectIterate } from "iterate/node";
 import type { IngressRouting } from "iterate/project-ingress";
 import { createCli } from "trpc-cli";
@@ -73,7 +74,7 @@ import {
   APPS,
   appSignInLink,
   assertFreshInstall,
-  configTemplateNames,
+  configTemplateFolders,
   foldPreviewSection,
   MAIN_ON_DEV,
   previewDeploymentName,
@@ -454,7 +455,7 @@ async function deployPreviewSteps(
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
-  // what an app installs in a project (Docs' "Install Docs"), as core/os/scripts/build.ts pins the template's agents:
+  // what an app installs in a project (Docs' "Install Docs"), pinned as config-templates.ts pins the voice template's:
   // worked out before the builds, since in a shallow CI checkout it fetches history
   const packagesCommit = checkoutPublishedPackageCommit(REPO_ROOT, process.env.PREVIEW_HEAD_SHA);
   const steps = [
@@ -620,7 +621,7 @@ function signInLinks(preview: {
     templates: dash
       ? templateQuickLaunches({
           dashUrl: dash.url,
-          templates: configTemplateNames(REPO_ROOT),
+          templates: configTemplateFolders(REPO_ROOT),
           changedPaths: preview.changedPaths,
           // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
           headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
@@ -639,11 +640,13 @@ function signInLinks(preview: {
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as test/helpers/project-host.ts `registerProject`, so the Dash link
- *  lands inside it. Then what a proxied app's link needs: a fetch route per proxied app to the
- *  deployment's own Worker (preview-config.ts `proxiedAppRoute`), and the deployment's `admins`
- *  members of the project's organization, so a reviewer signed in as themselves opens it. Each admin
- *  is found or created by email, the row their first sign-in finds. It never fails the deploy: it
- *  logs, and the section says when it failed. */
+ *  lands inside it. The project starts as the dash starts one when the person picks nothing: from
+ *  the preset whose folder is `default`, so the Agents link finds agents installed. Then what a
+ *  proxied app's link needs: a fetch route per proxied app to the deployment's own Worker
+ *  (preview-config.ts `proxiedAppRoute`), and the deployment's `admins` members of the project's
+ *  organization, so a reviewer signed in as themselves opens it. Each admin is found or created by
+ *  email, the row their first sign-in finds. It never fails the deploy: it logs, and the section
+ *  says when it failed. */
 async function seedSignIn(
   config: AppConfig,
   preview: {
@@ -661,7 +664,15 @@ async function seedSignIn(
       baseUrl: preview.url,
       auth: { type: "admin-secret", secret, as: { email } },
     });
-    using created = await connection.session.projects.create({ project });
+    const preset = (await connection.session.projects.templates()).find(
+      ({ reference }) =>
+        parseConfigRepoTemplateReference(reference).path?.split("/").at(-1) === "default",
+    );
+    if (!preset) throw new Error("the deployment offers no preset whose folder is `default`");
+    using created = await connection.session.projects.create({
+      project,
+      configRepoTemplate: preset.reference,
+    });
     await Promise.all(
       preview.proxiedApps.map((app) =>
         created.fetchRoutes.set(app.name, proxiedAppRoute(app.name, app.url)),
@@ -1281,4 +1292,4 @@ async function main(command: Command, options: PreviewOptions) {
   return deployPreview(await accountContext(), name, pr, apps);
 }
 
-void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });
+void createCli(import.meta).run({ formatError: describe });

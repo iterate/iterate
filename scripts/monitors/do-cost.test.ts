@@ -221,7 +221,7 @@ test.for([
     },
   },
   {
-    name: "open at a peak under 2× the tier: an edit and the 2× broadcast",
+    name: "open at a peak under 2× the tier: an edit and the 2× reply",
     open: openPage("2,124"),
     expected: {
       kind: "edit",
@@ -364,20 +364,28 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
     "09-22T17:41 prd resolve",
   ]);
 
-  // #error-pulse: 3 pages, 2 broadcast escalations and 3 resolutions, every one with both mentions;
-  // each page's first line now starts "✅ resolved:".
+  // #error-pulse: 3 pages and 2 escalations in the first one's thread, with both mentions, and
+  // nothing else: each resolution edited its page, whose first line now starts "✅ resolved:" and
+  // whose second says why.
   const pulse = slack.timeline("#error-pulse");
-  expect(pulse.map((message) => message.text.split("\n")[0])).toEqual([
-    `✅ resolved: DO cost page for dev/preview: ~$0.22/h (≈ $5.40/day), 0.1× the ceiling ${MENTIONS}`,
-    `🚨 DO cost for dev/preview passed 2× its page tier: ~$37/h (≈ $882/day) ${MENTIONS}`,
-    `🚨 DO cost for dev/preview passed 5× its page tier: ~$50/h (≈ $1,209/day) ${MENTIONS}`,
-    `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
-    `✅ resolved: back under 2 DO-hours/h since 04:00 ${MENTIONS}`,
-    `✅ resolved: back under 500 DO-hours/h since 06:00 ${MENTIONS}`,
-    `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
-    `✅ resolved: back under 2 DO-hours/h since 15:00 ${MENTIONS}`,
+  expect(pulse.map((message) => message.text.split("\n").slice(0, 2))).toEqual([
+    [
+      `✅ resolved: DO cost page for dev/preview: ~$0.22/h (≈ $5.40/day), 0.1× the ceiling ${MENTIONS}`,
+      "✅ back under 500 DO-hours/h since 06:00",
+    ],
+    [`🚨 DO cost for dev/preview passed 2× its page tier: ~$37/h (≈ $882/day) ${MENTIONS}`],
+    [`🚨 DO cost for dev/preview passed 5× its page tier: ~$50/h (≈ $1,209/day) ${MENTIONS}`],
+    [
+      `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
+      "✅ back under 2 DO-hours/h since 04:00",
+    ],
+    [
+      `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
+      "✅ back under 2 DO-hours/h since 15:00",
+    ],
   ]);
-  // Where each sits: a top-level page (null) or a reply in page N's thread, and broadcast or not.
+  // Where each sits: a top-level page (null) or a reply in page N's thread, and sent to the channel
+  // or not.
   expect(
     pulse.map((message) => ({
       thread: message.thread_ts ? pulse.findIndex((page) => page.ts === message.thread_ts) : null,
@@ -385,16 +393,13 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
     })),
   ).toEqual([
     { thread: null, broadcast: false },
-    { thread: 0, broadcast: true },
-    { thread: 0, broadcast: true },
-    { thread: null, broadcast: false },
-    { thread: 3, broadcast: false },
+    { thread: 0, broadcast: false },
     { thread: 0, broadcast: false },
     { thread: null, broadcast: false },
-    { thread: 6, broadcast: false },
+    { thread: null, broadcast: false },
   ]);
   // Each page keeps the peak it showed.
-  expect([pulse[0], pulse[3], pulse[6]].map((page) => page!.text.split("\n")[1])).toEqual([
+  expect([pulse[0], pulse[3], pulse[4]].map((page) => page!.text.split("\n")[2])).toEqual([
     "Impact: peak 10,610 DO-hours/h (~$60/h)",
     "Impact: peak 909 DO-hours/h (~$5.11/h)",
     "Impact: peak 668 DO-hours/h (~$3.76/h)",
@@ -564,9 +569,10 @@ test.for(
       });
       for (const page of pages) if (page.action !== "none") taken.push(page.action);
     }
+    // a page that moved to a new message is resolved by an edit of it; one still frozen, by a reply
     const resolutions = slack
       .timeline("#error-pulse")
-      .filter((message) => message.text.startsWith("✅ resolved: back under"));
+      .filter((message) => message.text.includes("back under"));
     expect({ actions: taken, resolutions: resolutions.length }).toEqual({
       actions,
       resolutions: 1,

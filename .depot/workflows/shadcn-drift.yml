@@ -7,6 +7,9 @@
 # printing each file's diff. The fix is a refresh (`node scripts/ci/shadcn-drift.ts refresh`), never
 # a hand edit.
 #
+# THE REGISTRY ROUND TRIP (scripts/ci/shadcn-registry.ts round-trip, whose header explains it): it
+# runs when an item's files or the registry change.
+#
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
 # answer can change; a registry blip fails it once, and a re-run asks again. Upstream moving with no
@@ -21,37 +24,42 @@ on:
     paths:
       - .depot/workflows/shadcn-drift.yml
       - scripts/ci/shadcn-drift.ts
+      - scripts/ci/shadcn-registry.ts
+      - packages/ui/registry.json
+      - packages/ui/src/components/**
+      - packages/ui/src/lib/**
+      - copybara/packages/registry.json
       - packages/ui/components.json
       - packages/ui/package.json
       - packages/ui/tsconfig.json
       - packages/ui/src/styles/globals.css
-      - packages/ui/src/components/alert-dialog.tsx
-      - packages/ui/src/components/avatar.tsx
-      - packages/ui/src/components/badge.tsx
-      - packages/ui/src/components/breadcrumb.tsx
-      - packages/ui/src/components/button.tsx
-      - packages/ui/src/components/card.tsx
-      - packages/ui/src/components/checkbox.tsx
-      - packages/ui/src/components/command.tsx
-      - packages/ui/src/components/dialog.tsx
-      - packages/ui/src/components/dropdown-menu.tsx
-      - packages/ui/src/components/empty.tsx
-      - packages/ui/src/components/field.tsx
-      - packages/ui/src/components/input-group.tsx
-      - packages/ui/src/components/input.tsx
-      - packages/ui/src/components/label.tsx
-      - packages/ui/src/components/native-select.tsx
-      - packages/ui/src/components/select.tsx
-      - packages/ui/src/components/separator.tsx
-      - packages/ui/src/components/sheet.tsx
-      - packages/ui/src/components/sidebar.tsx
-      - packages/ui/src/components/skeleton.tsx
-      - packages/ui/src/components/sonner.tsx
-      - packages/ui/src/components/spinner.tsx
-      - packages/ui/src/components/table.tsx
-      - packages/ui/src/components/tabs.tsx
-      - packages/ui/src/components/textarea.tsx
-      - packages/ui/src/components/tooltip.tsx
+      - packages/ui/src/components/ui/alert-dialog.tsx
+      - packages/ui/src/components/ui/avatar.tsx
+      - packages/ui/src/components/ui/badge.tsx
+      - packages/ui/src/components/ui/breadcrumb.tsx
+      - packages/ui/src/components/ui/button.tsx
+      - packages/ui/src/components/ui/card.tsx
+      - packages/ui/src/components/ui/checkbox.tsx
+      - packages/ui/src/components/ui/command.tsx
+      - packages/ui/src/components/ui/dialog.tsx
+      - packages/ui/src/components/ui/dropdown-menu.tsx
+      - packages/ui/src/components/ui/empty.tsx
+      - packages/ui/src/components/ui/field.tsx
+      - packages/ui/src/components/ui/input-group.tsx
+      - packages/ui/src/components/ui/input.tsx
+      - packages/ui/src/components/ui/label.tsx
+      - packages/ui/src/components/ui/native-select.tsx
+      - packages/ui/src/components/ui/select.tsx
+      - packages/ui/src/components/ui/separator.tsx
+      - packages/ui/src/components/ui/sheet.tsx
+      - packages/ui/src/components/ui/sidebar.tsx
+      - packages/ui/src/components/ui/skeleton.tsx
+      - packages/ui/src/components/ui/sonner.tsx
+      - packages/ui/src/components/ui/spinner.tsx
+      - packages/ui/src/components/ui/table.tsx
+      - packages/ui/src/components/ui/tabs.tsx
+      - packages/ui/src/components/ui/textarea.tsx
+      - packages/ui/src/components/ui/tooltip.tsx
       - packages/ui/src/hooks/use-mobile.ts
       - core/os/components.json
       - core/os/package.json
@@ -84,3 +92,7 @@ jobs:
         uses: ./.depot/actions/setup
       - name: Compare the vendored files with shadcn add
         run: node scripts/ci/shadcn-drift.ts check
+      # its own answer even when upstream moved under the vendored files
+      - name: Add every @iterate item from the built registry
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/shadcn-registry.ts round-trip

@@ -88,7 +88,7 @@ The URL alone goes to stdout; everything else goes to stderr. The tunnel lends t
 the project as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
 whose target is it. The route matches the name's host (`requestMatcher: { routingSlug }`), or
 with `--hostname` that one hostname of the project alone (`url: { hostname }`). The project's
-config worker forwards a matched request to the route's target (`configs/default/worker.ts`). By default only signed-in project members get through; others are
+config worker forwards a matched request to the route's target (`core/configs/default/worker.ts`). By default only signed-in project members get through; others are
 sent to sign in. The route lives as long as the lend: Ctrl-C deletes it, and a tunnel that dies
 without it (killed, asleep, offline) leaves the host answering 502 until the platform notices,
 then the route is gone too, until the tunnel runs again.

@@ -19,9 +19,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@iterate-com/ui/components/alert-dialog";
-import { Badge } from "@iterate-com/ui/components/badge";
-import { Button } from "@iterate-com/ui/components/button";
+} from "@iterate-com/ui/components/ui/alert-dialog";
+import { Badge } from "@iterate-com/ui/components/ui/badge";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import {
   Card,
   CardContent,
@@ -29,13 +29,13 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@iterate-com/ui/components/card";
-import { Field, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+} from "@iterate-com/ui/components/ui/card";
+import { Field, FieldLabel } from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import { DefaultPendingComponent } from "@iterate-com/ui/components/route-defaults";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -43,7 +43,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@iterate-com/ui/components/table";
+} from "@iterate-com/ui/components/ui/table";
 import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { dateOf } from "../../../lib/dates.ts";

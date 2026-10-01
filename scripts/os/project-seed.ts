@@ -432,4 +432,4 @@ export async function apply(options: {
   );
 }
 
-void createCli({ ...import.meta, name: "project-seed" }).run();
+void createCli(import.meta).run();

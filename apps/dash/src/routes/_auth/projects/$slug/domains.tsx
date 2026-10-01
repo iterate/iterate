@@ -19,9 +19,14 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { LoaderCircleIcon, Plus } from "lucide-react";
 import { z } from "zod";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
 import {
   Sheet,
   SheetClose,
@@ -30,7 +35,7 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
+} from "@iterate-com/ui/components/ui/sheet";
 import { cn } from "cn";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import type { IngressRouting } from "iterate/project-ingress";

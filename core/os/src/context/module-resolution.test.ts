@@ -323,7 +323,7 @@ test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath 
   );
 });
 
-test("a source that imports a package and a subpath the package imports of itself loads that subpath once, under both names (a config's probe imports agents.ts and worker.ts: @iterate-com/agents and its /install)", async () => {
+test("a source that imports a package and a subpath the package imports of itself loads that subpath once, under both names (a config's probe imports voice.ts and worker.ts: @iterate-com/voice and its /install)", async () => {
   const esm = fakeEsm({
     [`/pr/acme/shop/@acme/sdk@${sdkCommit}`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs";`,
     [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs`]: `import { name } from "acme/shop/@acme/sdk/contract"; export const connect = () => name;`,

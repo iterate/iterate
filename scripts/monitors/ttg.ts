@@ -25,12 +25,13 @@
 //                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
-// and at least 20 of them, has a median over 165 s or a p90 over 200 s, the check opens a page, and
-// edits it with each hour's numbers while they stay over; whenever that median is more than 20 s
-// over the lowest judged since the page or its last escalation, it escalates in the page's thread,
-// broadcast to the channel; once both are back under their lines it resolves the page (`pageFor`).
-// Fewer pushes change nothing. The page names the job that finished last on most of those pushes,
-// which ends their critical path.
+// and at least 20 of them, has a median more than 10% over 165 s or a p90 more than 10% over 200 s,
+// the check opens a page, and edits it with each hour's numbers while either is over its line;
+// whenever that median is more than 20 s over the lowest judged since the page or its last
+// escalation, it escalates in the page's thread; once both are back under their lines it resolves
+// the page (`judge`, `pageFor`). So a median that sits on its line neither pages nor resolves every
+// few hours. Fewer pushes change nothing. The page names the job that finished last on most of
+// those pushes, which ends their critical path.
 //
 // Its memory, in the health job's state, is the pushes of the last 7 days as measured and what the
 // channel was last told. Each run lists the PR runs of the last 26 hours and measures those it has
@@ -42,11 +43,12 @@ import { systemEvent } from "../ci/posthog-events.ts";
 import { decide, type PageUpdate } from "./page.ts";
 
 /** The page's lines on the time to green of the pushes that skipped the slow rows, in seconds; how
- *  far a median still over them must rise past the lowest judged since the last page to page red
- *  again; and the fewest such pushes in the last 24 hours it judges. The owner's rule is a push green within 3
- *  minutes: the p50 line pages with 15 s of it left, the p90 line once the slowest tenth are 20 s
- *  past it. */
-export const LINES = { p50: 165, p90: 200, worse: 20, minPushes: 20 };
+ *  far past a line, as a share of it, a page opens (`margin`: past 181.5 s or 220 s), while an open
+ *  page stays open until both are back under the lines themselves (`judge`); how far a median still
+ *  over them must rise past the lowest judged since the last page to page red again; and the fewest
+ *  such pushes in the last 24 hours it judges. The owner's rule is a push green within 3 minutes:
+ *  the p50 line is 15 s short of it, the p90 line 20 s past it. */
+export const LINES = { p50: 165, p90: 200, margin: 0.1, worse: 20, minPushes: 20 };
 /** The checks a push waits for, by their workflows' `name:`. LOC report and the PR dashboard gate
  *  nothing and finish within a minute; Kit Firmware runs only on firmware PRs. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
@@ -216,13 +218,16 @@ export function summarizePushes(pushes: Push[], window: { from: number; to: numb
 type PushSummary = ReturnType<typeof summarizePushes>;
 
 /** The last 24 hours against LINES: `over` when the time to green of the pushes that skipped the
- *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. Pure. */
+ *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. With
+ *  no page open (`paged` false) a line counts as crossed only past it by LINES.margin. Pure. */
 export function judge(
   summary: PushSummary,
+  paged: boolean,
 ): { judgement: "too-few" } | { judgement: "over" | "under"; p50: number } {
   const green = summary.byRows["slow-rows-skipped"].timeToGreen;
   if (!green || green.n < LINES.minPushes) return { judgement: "too-few" };
-  const over = green.p50 > LINES.p50 || green.p90 > LINES.p90;
+  const scale = paged ? 1 : 1 + LINES.margin;
+  const over = green.p50 > LINES.p50 * scale || green.p90 > LINES.p90 * scale;
   return { judgement: over ? "over" : "under", p50: green.p50 };
 }
 
@@ -288,7 +293,6 @@ export function renderPage(input: {
       kind: "escalate",
       page,
       news: `${signal} more than ${LINES.worse} s worse again: p50 ${green ? seconds(green.p50) : "none"}${best || ""}`,
-      broadcast: true,
     };
   return { signal, kind: input.kind, page };
 }
@@ -389,7 +393,7 @@ export async function checkTtg(input: {
   console.log(
     ["last 7 days:", ...renderGroups(week), "last 24 hours:", ...renderGroups(day)].join("\n"),
   );
-  const judged = judge(day);
+  const judged = judge(day, memory.lastPage?.judgement === "over");
   const owed = pageFor(memory.lastPage, judged);
   const kind = input.testRun
     ? ({ over: "post", "too-few": "post", under: "resolve" } as const)[judged.judgement]

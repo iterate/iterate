@@ -12,7 +12,6 @@ packages:
   - apps/dummy-petshop
   - apps/ci-reports
   - apps/telemetry
-  - packages/agents
   - packages/ai-linter
   - packages/github-sync
   - packages/docs

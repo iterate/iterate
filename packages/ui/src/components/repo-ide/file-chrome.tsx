@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { LockIcon } from "lucide-react";
-import { Badge } from "../badge.tsx";
-import { Tabs, TabsList, TabsTrigger } from "../tabs.tsx";
+import { Badge } from "#/components/ui/badge.tsx";
+import { Tabs, TabsList, TabsTrigger } from "#/components/ui/tabs.tsx";
 
 /** Shared editor-pane chrome: the path header, a status badge and an actions slot. */
 export function FileChrome({

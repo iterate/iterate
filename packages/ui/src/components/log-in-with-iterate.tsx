@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { cn } from "cn";
-import { IterateLogo } from "./iterate-logo.tsx";
+import { IterateLogo } from "#/components/iterate-logo.tsx";
 
 /** THE log-in button — the one people recognise across sites, the way Google's is one button
  *  everywhere: one rectangle, white, a thin border, the mark on the left, "Log in with iterate" in

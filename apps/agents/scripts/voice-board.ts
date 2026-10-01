@@ -175,4 +175,4 @@ export default async function voiceBoard(
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 
-void createCli({ ...import.meta, name: "voice-board" }).run();
+void createCli(import.meta).run();

@@ -1,22 +1,21 @@
 name: pkg.pr.new
 on:
   # Every main commit publishes, so any main sha is installable
-  # (pkg.pr.new/iterate/iterate/iterate@<sha>, the SDK and the `iterate` CLI,
+  # (pkg.pr.new/iterate/iterate/iterate@<sha>, the SDK, the agents app and the `iterate` CLI,
   # pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@<sha>, and the userspace apps a project
-  # installs: pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>, …/@iterate-com/voice@<sha>,
+  # installs: pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>,
   # …/@iterate-com/github-sync@<sha>, …/@iterate-com/ai-linter@<sha>, …/@iterate-com/docs@<sha>).
   push:
     branches:
       - main
   # A PR publishes only when a published package's inputs change: core/lib imports nothing
-  # outside itself, packages/petshop-sdk only capnweb, packages/agents,
-  # packages/github-sync, packages/ai-linter and packages/docs only the SDK (and npm), packages/voice the SDK, the
-  # agents and packages/shared (inlined at build), and the root manifests and lockfile decide the
-  # install. The e2e rows that install agents and voice as packages
+  # outside itself, packages/petshop-sdk only capnweb,
+  # packages/github-sync, packages/ai-linter and packages/docs only the SDK (and npm), packages/voice the SDK
+  # and packages/shared (inlined at build), and the root manifests and lockfile decide the
+  # install. The e2e rows that install voice as a package
   # pin such a PR's head build (test/vitest/agents/support.ts `publishedPackage`).
   pull_request:
     paths:
-      - packages/agents/**
       - packages/ai-linter/**
       - packages/github-sync/**
       - packages/docs/**
@@ -44,7 +43,6 @@ jobs:
       - run: pnpm install --frozen-lockfile --filter iterate-root --filter iterate... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice... --filter @iterate-com/github-sync... --filter @iterate-com/ai-linter... --filter @iterate-com/docs...
       - run: pnpm --dir core/lib build
       - run: pnpm --dir packages/petshop-sdk build
-      - run: pnpm --dir packages/agents build
       - run: pnpm --dir packages/voice build
       - run: pnpm --dir packages/github-sync build
       - run: pnpm --dir packages/ai-linter build
@@ -54,4 +52,4 @@ jobs:
       # pkg.pr.new requires every monorepo package in one invocation. A preview deploy reads the
       # packages off this line and waits until pkg.pr.new serves each of them
       # (scripts/os/preview-packages.ts `publishedPackagesOf`).
-      - run: pnpm exec pkg-pr-new publish --pnpm ./core/lib ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter ./packages/docs
+      - run: pnpm exec pkg-pr-new publish --pnpm ./core/lib ./packages/petshop-sdk ./packages/voice ./packages/github-sync ./packages/ai-linter ./packages/docs

@@ -19,8 +19,6 @@ on:
       # the dash renders packages/ui (the context view, the app shell); a change there is a dash change
       - packages/ui/**
       - packages/shared/**
-      # the secrets page types `itx.agents` from the agents app's package
-      - packages/agents/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml

@@ -23,9 +23,10 @@ on:
       - "!core/os/docs/**"
       - "!core/os/**/*.test.ts"
       - "!core/os/scripts/preview*.ts"
+      # the templates the Worker embeds: core's, and iterate's with voice pinned at the deployed commit
+      - core/configs/**
       - configs/**
-      # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
-      - packages/agents/**
+      - packages/voice/**
       - core/lib/**
       - envs.ts
       - scripts/lib/**

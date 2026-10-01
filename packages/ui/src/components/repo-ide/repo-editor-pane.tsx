@@ -1,5 +1,4 @@
 import { MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
-import { Button } from "../button.tsx";
 import { CodePreviewToggle, EmptyPane, ErrorPane, FileChrome } from "./file-chrome.tsx";
 import { HtmlPreview } from "./html-preview.tsx";
 import { MarkdownPreview } from "./markdown-preview.tsx";
@@ -7,6 +6,7 @@ import { RepoCodeEditor } from "./repo-code-editor.tsx";
 import { isPreviewablePath, repoFileKind, type RepoFileLanguage } from "./repo-file-kinds.ts";
 import { readRepoFile, useRead, type RepoProject } from "./repo-client.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
+import { Button } from "#/components/ui/button.tsx";
 
 /** What the pane does to one file's change: the IDE owns the working tree. */
 export interface RepoFileHandlers {

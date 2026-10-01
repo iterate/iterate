@@ -5,7 +5,9 @@ The Iterate context platform runs at **https://os.iterate.com**. `core/os` owns 
 | Path                     | Purpose                                                         |
 | ------------------------ | --------------------------------------------------------------- |
 | `core/os`                | Platform Worker and its issuer pages (sign-in, consent)         |
-| `core/lib`               | `iterate/*` SDK and the `iterate` CLI (npm `iterate`)           |
+| `core/lib`               | `iterate/*` SDK, the agents app and the `iterate` CLI           |
+| `core/configs`           | The project templates every build offers                        |
+| `configs`                | iterate's templates that need packages (voice)                  |
 | `apps/dash`              | Projects, organizations, sessions, and personal access tokens   |
 | `apps/agents`            | Agent conversations and inspection                              |
 | `apps/notes`             | Notes client                                                    |
@@ -18,7 +20,6 @@ The Iterate context platform runs at **https://os.iterate.com**. `core/os` owns 
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
 | `apps/ci-reports`        | Opens CI traces and Playwright reports from Depot artifacts     |
 | `apps/telemetry`         | core/os's logs and spans into the telemetry lake                |
-| `packages/agents`        | The agents app a project installs (`@iterate-com/agents`)       |
 | `packages/voice`         | Voice on the agents app, installed too (`@iterate-com/voice`)   |
 | `packages/github-sync`   | Config repo ↔ GitHub, one history (`@iterate-com/github-sync`)  |
 | `packages/docs`          | Docs' co-editing processors (`@iterate-com/docs`)               |

@@ -282,7 +282,7 @@ export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = 
 };
 
 /** Stateless config entrypoint, the default export of a project's config repo; its init handles
- *  `events.iterate.com/project/worker-updated` (configs/default/worker.ts). */
+ *  `events.iterate.com/project/worker-updated` (core/configs/default/worker.ts). */
 export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {

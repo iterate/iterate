@@ -1,5 +1,5 @@
 import { Navigate } from "@tanstack/react-router";
-import { DefaultPendingComponent } from "./route-defaults.tsx";
+import { DefaultPendingComponent } from "#/components/route-defaults.tsx";
 
 /** `/projects` in an app that shows one project at a time (Agents, Notes, Voice): the first
  *  project this session lists, else a note that there is none. It navigates once the client-only

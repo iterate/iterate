@@ -1,7 +1,7 @@
 # @iterate-com/voice
 
 A GPT-Live voice conversation on a fresh context per press: every call is an agent of the agents
-app (`@iterate-com/agents`, created through `itx.agents`), with this package's relay facet beside
+app (`iterate/agents`, created through `itx.agents`), with this package's relay facet beside
 it and the project's `itx.voice` worker answering the press. The relay holds the live model; each
 request the live model delegates goes to the agent as a message through the agents app
 (`itx.agents.get(path).message(words)`), and the agent's answer goes back to the live model to
@@ -12,7 +12,7 @@ a project installs this package; the platform ships none of it.
 
 A project's config repo depends on the package, re-exports its service and relay class from
 `voice.ts`, and installs voice from its init case beside the agents app, which every call runs on
-(configs/default does all of it):
+(configs/voice does all of it):
 
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" }
@@ -20,7 +20,7 @@ voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/vo
 ```
 
 ```ts
-import { installAgents } from "@iterate-com/agents/install";
+import { installAgents } from "iterate/agents/install";
 import { installVoice } from "@iterate-com/voice/install";
 
 // in processEvent, the init case

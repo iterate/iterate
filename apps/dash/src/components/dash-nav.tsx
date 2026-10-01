@@ -28,7 +28,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-} from "@iterate-com/ui/components/sidebar";
+} from "@iterate-com/ui/components/ui/sidebar";
 import { useOrganizationTree } from "./organization-tree.tsx";
 
 /** The root loader's: the directory of apps this deployment has (apps.ts `appDirectory`). */

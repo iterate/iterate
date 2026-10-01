@@ -17,11 +17,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@iterate-com/ui/components/alert-dialog";
-import { Button } from "@iterate-com/ui/components/button";
+} from "@iterate-com/ui/components/ui/alert-dialog";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { ConnectButton } from "@iterate-com/ui/components/connect-button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
 import {
   Sheet,
   SheetClose,
@@ -30,9 +35,9 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { Textarea } from "@iterate-com/ui/components/textarea";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
+import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { missingScopes } from "iterate/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,

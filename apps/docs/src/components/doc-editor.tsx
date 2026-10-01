@@ -15,9 +15,9 @@ import {
   Table,
   Undo2,
 } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { Separator } from "@iterate-com/ui/components/separator";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
+import { Separator } from "@iterate-com/ui/components/ui/separator";
 import {
   insertBlock,
   promptLink,

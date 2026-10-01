@@ -52,3 +52,12 @@ jobs:
           # deployment runs the migrations; the types are checked against definitions.sql.
           - name: Check the control plane's schema
             run: pnpm --dir core/os db:check && pnpm --dir core/os db:generate && git diff --exit-code -- core/os/src/control-plane/db
+          # The shadcn registry (packages/ui/AGENTS.md): registry.json's dependencies are what its
+          # items' files import. Copybara publishes it as it is committed.
+          - name: Check the shadcn registry
+            run: |
+              node scripts/ci/shadcn-registry.ts update
+              git diff --exit-code -- packages/ui/registry.json || {
+                echo 'Run `node scripts/ci/shadcn-registry.ts update` and commit packages/ui/registry.json.' >&2
+                exit 1
+              }

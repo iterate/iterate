@@ -2,8 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import { Check, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import type { Quote } from "@iterate-com/docs/anchor";
 import type { Comment } from "@iterate-com/docs/comments";
-import { Button } from "@iterate-com/ui/components/button";
-import { Textarea } from "@iterate-com/ui/components/textarea";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { cn } from "cn";
 import type { DocSession, DocSessionState, ThreadView } from "../editor/doc-session.ts";
 

@@ -1,5 +1,5 @@
 // ai-linter/install.ts — how a project installs the linter: from a folder of its config repo that pins
-// this package (`aiLinterFolder`), as the agents app installs (@iterate-com/agents/install).
+// this package (`aiLinterFolder`), as voice installs (@iterate-com/voice/install).
 // `installAiLinter` mounts it on the log of the GitHub connection that reaches the repository, which
 // only a session may do (README.md). Nothing here is the runtime.
 import type { IterateContextApi } from "iterate/api";

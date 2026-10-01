@@ -39,6 +39,7 @@ export const previewPaths = [
   ".depot/workflows/deploy-kit.yml",
   ".depot/workflows/preview-os.yml",
   "core/os/**",
+  "core/configs/**",
   "configs/**",
   "apps/dash/**",
   "apps/agents/**",
@@ -53,8 +54,7 @@ export const previewPaths = [
   "test/**",
   // the SDK, and the CLI that test/vitest/os/iterate-cli.e2e.test.ts drives built
   "core/lib/**",
-  // the agents and voice rows install these (test/vitest/agents), and the docs spec this one
-  "packages/agents/**",
+  // the voice rows install this (test/vitest/agents), and the docs spec this one
   "packages/voice/**",
   "packages/docs/**",
   "packages/shared/**",

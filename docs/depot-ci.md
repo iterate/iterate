@@ -52,7 +52,7 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
 - `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
-  `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
+  `@iterate-com/petshop-sdk`, `@iterate-com/voice`,
   `@iterate-com/github-sync` and `@iterate-com/ai-linter` packages to
   [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes their inputs
   (their folders, `core/lib` and `packages/*`, `packages/shared`, the root manifests and lockfile, or the workflow
@@ -330,7 +330,7 @@ branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
 - A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
   `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with
-  `createCli({ ...import.meta })` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  `createCli(import.meta)` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
   `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
   not install.
@@ -769,33 +769,34 @@ and OTLP JSON export.
 
 ## Slack channels
 
-#error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
-(`onCallMention` in `scripts/ci/slack.ts`), thread replies included: the [health](#health) pages,
-the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the preview
-sweep's pages (`scripts/os/preview.ts sweep`), a failed context sweep
-(`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
-(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each pull request event as one
-top-level line (its title cut to 80 characters, its base named only when it is not `main`), each
-app's prd deploy as `🚀 <App> live · run` in the thread of its merge's line (`(re-run)` for a second
-run of the same commit; top-level with its sha when the deploy was dispatched or no merge's line
-appears within 3 minutes), the PR dashboard, the Durable Object cost alarm's daily thread, each
-context sweep's result, the orphans it destroyed included (the crash hunt leaves some every night),
-and the 🧪 test pages.
+#error-pulse is for what someone must act on. A page and each escalation in its thread mention Jonas
+and Misha (`onCallMention` in `scripts/ci/slack.ts`); a resolution mentions nobody. The posters: the
+[health](#health) pages, the prd fault alarm, the prd post-deploy check
+(`scripts/ci/prd-post-deploy-check.ts`), the preview sweep's pages (`scripts/os/preview.ts sweep`),
+a failed context sweep (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other
+failed scheduled workflow (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each
+pull request event as one top-level line (its title cut to 80 characters, its base named only when
+it is not `main`), each app's prd deploy as `🚀 <App> live · run` in the thread of its merge's line
+(`(re-run)` for a second run of the same commit; top-level with its sha when the deploy was
+dispatched or no merge's line appears within 3 minutes), the PR dashboard, the Durable Object cost
+alarm's daily thread, each context sweep's result, the orphans it destroyed included (the crash hunt
+leaves some every night), and the 🧪 test pages.
 
 Every page keeps one message per incident (`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then
 `Impact:`, `Do:`, the ids to act on and one link. A later run that finds the incident still there
-edits the page, which notifies nobody; the first run that finds it gone edits its first line to
-start `✅ resolved:` and replies once in its thread, mentioning both. Older open pages of the same
-incident are marked resolved naming no one. A page Slack can no longer edit is posted again by its
-next edit. One still in the channel (past the workspace's edit window) is closed by a reply in its
-thread sent to the channel too, starting `✅ resolved:`, which later runs read as closed: the
-resolution itself when the incident ended, else a line naming no one. A deleted page's resolution
-goes top-level. The page's first line, or that reply, is its state, so the channel's history is the
-only state a poster keeps; a run that sees only part of an incident (the preview
-sweep's stuck namespaces, the apps that failed on a commit) carries forward what the open page names.
-Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, each `notify.ts` command's
-`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse. `notify.ts deploy-success
---test-run` with a merged commit's `GITHUB_SHA` replies in that merge's thread, as its deploy did.
+edits the page, which notifies nobody; one that finds it worse replies in its thread with both
+mentions, never sent to the channel. The first run that finds it gone edits the page: its first line
+starts `✅ resolved:` and a second line says why. That edit is the whole resolution, so it pings no
+one. Older open pages of the same incident are marked resolved naming no one. A page Slack can no
+longer edit is posted again by its next edit. One still in the channel (past the workspace's edit
+window) is closed by a reply in its thread sent to the channel too, starting `✅ resolved:` and
+naming no one, which later runs read as closed. A deleted page's resolution sends nothing. The
+page's first line, or that reply, is its state, so the channel's history is the only state a poster
+keeps; a run that sees only part of an incident (the preview sweep's stuck namespaces, the apps that
+failed on a commit) carries forward what the open page names. Only a run on main pages; a 🧪 test run
+(each workflow's `test-run` input, each `notify.ts` command's `--test-run`) posts to #ci, mentions
+nobody and never reads #error-pulse. `notify.ts deploy-success --test-run` with a merged commit's
+`GITHUB_SHA` replies in that merge's thread, as its deploy did.
 
 | Poster                                                  | One page per   | Resolved by                                                  |
 | ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
@@ -818,7 +819,9 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
 - **main e2e** and **slow e2e rows**: Main OS e2e's own `alert` job, as soon as
   the run's deploy and both suites have ended, from their results and the suite
   summaries E2E tests and the specs shards upload with their flake records. A push
-  run only.
+  run only. A red slow row fails E2E tests, so while main e2e is red slow e2e rows
+  has no red page: main e2e's page names the row, and its escalation names a slow
+  row that breaks later. Slow e2e rows' unjudged page is its own.
 - `health.yml`, every hour, judges what the measuring workflows left:
   - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
     real model, from its telemetry.
@@ -829,8 +832,8 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
     thread in #ci is a headline, the $/day at the latest hour's rate and today so far, and one
     reply with a line per account, both edited every hour; an account with a complete hour over
     its ceiling today is a 🔴 line. An account at its page tier is one page in #error-pulse,
-    edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a broadcast
-    reply in its thread, and two complete hours under the ceiling resolve it. A page is open for
+    edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a reply in
+    its thread, and two complete hours under the ceiling resolve it. A page is open for
     48 hours: an incident that lasts longer is paged again, and the new page resolves the older
     one naming no one.
   - **telemetry** (`scripts/monitors/telemetry.ts`): on each account's telemetry lake, the alert
@@ -849,15 +852,15 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
 
 What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 
-| Verdict                                                                     | What the channel gets                                                                                   |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Red or unjudged after green                                                 | A page: what broke at which commit with both mentions, its impact, what to do, the run                  |
-| Still red                                                                   | An edit of the page: the newest commit, the failing jobs and rows, "red since `<sha>`, N runs"          |
-| Still red, failing a job or row the page has not named                      | The edit, and a thread reply naming the new failures                                                    |
-| PR time to green more than 20 s worse again                                 | The edit, and a thread reply broadcast to the channel                                                   |
-| Green again                                                                 | A `✅ resolved: …` thread reply, and the page's first line edited to start `✅ resolved:`               |
-| Unjudged after red, or red after unjudged                                   | The open page resolved and a new one opened: an unjudged page never hides a red one                     |
-| Any, when Slack can no longer edit the page (deleted, past its edit window) | The update goes top-level: a new page, with any escalation reply in its thread, or the resolution reply |
+| Verdict                                                                     | What the channel gets                                                                                       |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Red or unjudged after green                                                 | A page: what broke at which commit with both mentions, its impact, what to do, the run                      |
+| Still red                                                                   | An edit of the page: the newest commit, the failing jobs and rows, "red since `<sha>`, N runs"              |
+| Still red, failing a job or row the page has not named                      | The edit, and a thread reply naming the new failures with both mentions, not sent to the channel            |
+| PR time to green more than 20 s worse again                                 | The same: the edit, and a thread reply                                                                      |
+| Green again                                                                 | An edit of the page alone: its first line starts `✅ resolved:`, its second says why                        |
+| Unjudged after red, or red after unjudged                                   | The open page resolved and a new one opened: an unjudged page never hides a red one                         |
+| Any, when Slack can no longer edit the page (deleted, past its edit window) | An edit or escalation opens a new page, with any escalation reply in its thread; a resolution sends nothing |
 
 A check that could not read Depot, or found its probe broken (a report with no rows, a suite that
 did not run), fails the job once the others have paged. Main OS e2e's page job reports on the
@@ -894,12 +897,14 @@ Pushes are split by what their E2E tests job ran (the suite summary's `slowRows`
 skipped, every row, no summary, and no Preview OS. The job log prints each group's p50 and p90 over
 24 hours and 7 days, and each push is a PostHog event, `pr checks settled`.
 
-It opens a page when the pushes that skipped the slow rows took a p50 over 165 s or a p90 over
-200 s across the last 24 hours, judged from 20 such pushes up; edits it hourly while they stay
-over; escalates whenever that p50 is more than 20 s over the lowest it judged since the page or its
-last escalation; and resolves it once both are back under. The lines hold the owner's rule that a
-push is green within 3 minutes (`LINES` in the script). The page names the job that finished last
-on most of those pushes (`preview-os.yml:specs`, say).
+Its lines are 165 s for the p50 and 200 s for the p90 of the pushes that skipped the slow rows
+over the last 24 hours, judged from 20 such pushes up. A page opens only when one is more than 10%
+over its line (182 s, 220 s); it is edited hourly while either is over its line, escalates whenever
+that p50 is more than 20 s over the lowest it judged since the page or its last escalation, and
+resolves once both are back under their lines. So a p50 that sits on its line neither pages nor
+resolves every few hours. The lines come from the owner's rule that a push is green within 3
+minutes (`LINES` in the script). The page names the job that finished last on most of those pushes
+(`preview-os.yml:specs`, say).
 
 ## Browser reports from artifacts
 

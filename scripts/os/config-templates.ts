@@ -1,8 +1,9 @@
 // scripts/os/config-templates.ts — ITERATE'S PROJECT TEMPLATES (configs/*) AS THE PLATFORM'S BUILD
 // TAKES THEM (core/os/scripts/build.ts `ConfigTemplate`): what os.iterate.com, a preview and the test
-// suites offer a creation. Each template is its tracked files (not the node_modules/ an `npm install`
-// for a local `tsc` leaves there), its agents and voice at this checkout's pkg.pr.new build, never
-// `@main`, which moves, under its GitHub reference at this checkout's commit.
+// suites offer a creation beside core's own (core/configs, which every build offers). Each template
+// is its tracked files (not the node_modules/ an `npm install` for a local `tsc` leaves there), its
+// packages of ours at this checkout's pkg.pr.new build, never `@main`, which moves, under its GitHub
+// reference at this checkout's commit.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";

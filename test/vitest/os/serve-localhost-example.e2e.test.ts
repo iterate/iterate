@@ -2,7 +2,7 @@
 // CLI, run as a reader runs it (`node serve-localhost.mjs <origin> <project> <routingSlug> <port>`,
 // the operator's credentials in the environment) against the deployment, with a tiny HTTP +
 // WebSocket server on a local port. The project is a fresh one on the default template, so its
-// config worker is the template's router (configs/default/worker.ts). Pins:
+// config worker is the template's router (core/configs/default/worker.ts). Pins:
 //   • the URL it prints reaches the local server over HTTP, the visitor's path as-is (under paths
 //     routing the platform strips the base, so the local server sees the same path either way),
 //     the body uncompressed (a local server that gzips whatever the request accepts is not asked to)

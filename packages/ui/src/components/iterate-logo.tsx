@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { cn } from "cn";
-import iterateLogoAsset from "../assets/iterate-logo.svg";
+import iterateLogoAsset from "./iterate-logo.svg";
 
 export function IterateLogo({
   alt = "iterate",

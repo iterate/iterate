@@ -199,7 +199,7 @@ export function signInLinkOf(input: {
  *  (scripts/os/preview.ts `seedSignIn`), so its `Sign in ↗` lands on the app: the routing slug of the
  *  app's name, members only, to a loaded worker that fetches through to `appUrl`, the deployment's
  *  own app Worker, as the app's `config-worker.ts` does for prd's. The project's config worker
- *  (configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
+ *  (core/configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
  *  sign-in challenge. */
 export function proxiedAppRoute(app: string, appUrl: string) {
   const { protocol, host } = new URL(appUrl);
@@ -227,31 +227,34 @@ export function proxiedAppRoute(app: string, appUrl: string) {
 
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
-/** The config templates a project can be born from: the directories of configs/. */
-export function configTemplateNames(repoRoot: string) {
-  return readdirSync(path.join(repoRoot, "configs"), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
+/** Every config template's folder, core's (core/configs) and iterate's (configs), by name. */
+export function configTemplateFolders(repoRoot: string) {
+  return ["core/configs", "configs"]
+    .flatMap((parent) =>
+      readdirSync(path.join(repoRoot, parent), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `${parent}/${entry.name}`),
+    )
+    .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
 }
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
- *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
- *  the custom field prefilled), so the project is born from the unmerged template. `default` never
- *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (core/os/scripts/build.ts). */
+ *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:<folder>`, the
+ *  custom field prefilled), so the project is born from the unmerged template. `default` never is:
+ *  the preview embeds this PR's copy (core/os/scripts/build.ts). */
 export function templateQuickLaunches(input: {
   dashUrl: string;
+  /** Each template's folder (`configTemplateFolders`). */
   templates: string[];
   changedPaths: string[];
   headSha: string;
 }) {
-  return input.templates.map((name) => {
+  return input.templates.map((folder) => {
+    const name = path.basename(folder);
     const changed =
-      name !== "default" && input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
-    const template = changed
-      ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
-      : name;
+      name !== "default" && input.changedPaths.some((file) => file.startsWith(`${folder}/`));
+    const template = changed ? `github:iterate/iterate#${input.headSha}&path:${folder}` : name;
     return {
       name,
       ...(changed && { fromHead: input.headSha }),

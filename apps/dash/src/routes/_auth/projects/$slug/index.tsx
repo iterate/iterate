@@ -21,24 +21,29 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@iterate-com/ui/components/alert-dialog";
-import { Badge } from "@iterate-com/ui/components/badge";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+} from "@iterate-com/ui/components/ui/alert-dialog";
+import { Badge } from "@iterate-com/ui/components/ui/badge";
+import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
 import {
   Card,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@iterate-com/ui/components/card";
+} from "@iterate-com/ui/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@iterate-com/ui/components/dropdown-menu";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+} from "@iterate-com/ui/components/ui/dropdown-menu";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
 import {
   Sheet,
   SheetClose,
@@ -47,8 +52,8 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import { cn } from "cn";
 import { Identifier } from "../../../../components/identifier.tsx";
 import {

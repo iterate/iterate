@@ -71,9 +71,9 @@ test.for([
 
 test.for([
   {
-    name: "a resolution mentions both",
+    name: "a resolution mentions nobody: good news is not a page",
     text: resolvedText("main e2e green again", false),
-    expected: `✅ resolved: main e2e green again ${MENTIONS}`,
+    expected: "✅ resolved: main e2e green again",
   },
   {
     name: "a test run's resolution is marked and mentions nobody",
@@ -190,26 +190,16 @@ test.for([
 });
 
 test.for([
-  { name: "the page is edited first, then the thread gets the reply", updateError: undefined },
   {
-    name: "a failed edit posts no reply, so the next run resolves it once",
-    updateError: "fatal_error",
+    name: "the page is edited to say it is resolved and why, and nothing is posted",
+    updateError: undefined,
   },
+  { name: "a failed edit throws, so the next run resolves it", updateError: "fatal_error" },
 ])("resolvePage: $name", async ({ updateError }) => {
   const slack = fakeSlack({ now });
-  const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, { updateError });
-  const edit = {
-    method: "chat.update",
-    channel: errorPulse,
-    ts: page.ts,
-    text: `✅ resolved: page ${MENTIONS}`,
-  };
-  const reply = {
-    method: "chat.postMessage",
-    channel: errorPulse,
-    thread_ts: page.ts,
-    text: `✅ resolved: back under 2 ${MENTIONS}`,
-  };
+  const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}\nImpact: …`, {
+    updateError,
+  });
   await expect(
     resolvePage(slack.client, {
       channel: errorPulse,
@@ -221,7 +211,14 @@ test.for([
       (error: Error) => error.message,
     ),
   ).resolves.toBe(updateError ? "An API error occurred: fatal_error" : "resolved");
-  expect(writes(slack)).toEqual(updateError ? [edit] : [edit, reply]);
+  expect(writes(slack)).toEqual([
+    {
+      method: "chat.update",
+      channel: errorPulse,
+      ts: page.ts,
+      text: `✅ resolved: page ${MENTIONS}\n✅ back under 2\nImpact: …`,
+    },
+  ]);
 });
 
 // A page Slack can no longer edit (PAGE_GONE_ERRORS): deleted, or past the workspace's edit window
@@ -234,7 +231,7 @@ const goneRows = [...PAGE_GONE_ERRORS].map((error) => ({
 }));
 
 test.for(goneRows)(
-  "resolvePage: a page Slack answers $error to gets its resolution once, in its thread and the channel when it is still there",
+  "resolvePage: a page Slack answers $error to is closed by a reply naming no one when it is still there, and left alone when deleted",
   async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, {
@@ -247,25 +244,26 @@ test.for(goneRows)(
       text: page.text,
       why: "back under 2",
     });
-    const text = `✅ resolved: back under 2 ${MENTIONS}`;
-    expect(writes(slack).slice(1)).toEqual([
+    expect(writes(slack).slice(1)).toEqual(
       frozen
-        ? {
-            method: "chat.postMessage",
-            channel: errorPulse,
-            thread_ts: page.ts,
-            reply_broadcast: true,
-            text,
-          }
-        : { method: "chat.postMessage", channel: errorPulse, text },
-    ]);
+        ? [
+            {
+              method: "chat.postMessage",
+              channel: errorPulse,
+              thread_ts: page.ts,
+              reply_broadcast: true,
+              text: "✅ resolved: back under 2",
+            },
+          ]
+        : [],
+    );
     expect(warn).toHaveBeenCalledWith(
       JSON.stringify({ event: "slack.page-gone", channel: errorPulse, ts: page.ts, reason: error }),
     );
   },
 );
 
-test("resolvePage: a deleted page gets its resolution top-level", async () => {
+test("resolvePage: a deleted page gets nothing in its place", async () => {
   const slack = fakeSlack({ now });
   const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`);
   await slack.client.chat.delete({ channel: errorPulse, ts: page.ts });
@@ -276,9 +274,7 @@ test("resolvePage: a deleted page gets its resolution top-level", async () => {
     text: page.text,
     why: "back under 2",
   });
-  expect(slack.channel("#error-pulse").map((message) => message.text)).toEqual([
-    `✅ resolved: back under 2 ${MENTIONS}`,
-  ]);
+  expect(slack.channel("#error-pulse")).toEqual([]);
 });
 
 test.for(goneRows)(
@@ -364,13 +360,7 @@ test.for(goneRows)(
         method: "chat.update",
         channel: errorPulse,
         ts: newer.ts,
-        text: `✅ resolved: sweep: stuck n=2 ${MENTIONS}`,
-      },
-      {
-        method: "chat.postMessage",
-        channel: errorPulse,
-        thread_ts: newer.ts,
-        text: `✅ resolved: the sweep succeeded ${MENTIONS}`,
+        text: `✅ resolved: sweep: stuck n=2 ${MENTIONS}\n✅ the sweep succeeded`,
       },
     ]);
   },
@@ -427,8 +417,7 @@ test.for([
       steps: steps.filter((step) => step !== "none"),
       resolutions: slack
         .timeline("#error-pulse")
-        .filter((message) => message.text === `✅ resolved: the sweep succeeded ${MENTIONS}`)
-        .length,
+        .filter((message) => message.text.includes("the sweep succeeded")).length,
       open: await findOpenPages(slack.client, { ...input, channel: errorPulse }),
     }).toEqual({
       steps: expected,
@@ -489,23 +478,15 @@ test("keepPage: one incident over five nights is posted, edited twice, resolved 
   for (const ids of [["• a"], ["• a"], ["• a", "• b"], [], []]) steps.push(await night(ids));
   expect({ steps, writes: writes(slack).map((call) => call.method) }).toEqual({
     steps: ["post", "edit", "edit", "resolve", "none"],
-    writes: ["chat.postMessage", "chat.update", "chat.update", "chat.update", "chat.postMessage"],
+    writes: ["chat.postMessage", "chat.update", "chat.update", "chat.update"],
   });
   const [page] = slack.channel("#error-pulse");
-  expect(writes(slack).slice(-2)).toEqual([
-    {
-      method: "chat.update",
-      channel: errorPulse,
-      ts: page!.ts,
-      text: `✅ resolved: preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) ${MENTIONS}\nImpact: each counts toward the account's limit\nDo: escalate to Cloudflare with these ids\n• a\n• b`,
-    },
-    {
-      method: "chat.postMessage",
-      channel: errorPulse,
-      thread_ts: page!.ts,
-      text: `✅ resolved: Cloudflare deleted them ${MENTIONS}`,
-    },
-  ]);
+  expect(writes(slack).at(-1)).toEqual({
+    method: "chat.update",
+    channel: errorPulse,
+    ts: page!.ts,
+    text: `✅ resolved: preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) ${MENTIONS}\n✅ Cloudflare deleted them\nImpact: each counts toward the account's limit\nDo: escalate to Cloudflare with these ids\n• a\n• b`,
+  });
 });
 
 test("keepPage: older open pages of the incident are resolved by an edit alone, and the newest is kept", async () => {

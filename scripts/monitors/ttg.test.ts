@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  checkTtg,
   judge,
   LINES,
   measurePush,
@@ -8,6 +9,7 @@ import {
   renderPage,
   summarizePushes,
   type RunMetrics,
+  type TtgMemory,
 } from "./ttg.ts";
 
 // Depot's GetRunMetrics for run pxt90nlfvh (PR #3009, 2026-09-24), cut to the fields the guard reads.
@@ -419,28 +421,61 @@ test("summarizes the window's pushes by what their e2e ran, with interpolated pe
 });
 
 test.for([
-  { name: "one push is too few to judge", seconds: [150], judged: { judgement: "too-few" } },
+  {
+    name: "one push is too few to judge",
+    seconds: [150],
+    paged: false,
+    judged: { judgement: "too-few" },
+  },
   {
     name: "20 pushes at 150 s are under",
     seconds: Array(20).fill(150),
+    paged: false,
     judged: { judgement: "under", p50: 150 },
   },
   {
-    name: "a median on the line is under",
-    seconds: Array(20).fill(165),
-    judged: { judgement: "under", p50: 165 },
+    name: "with no page open, a median 10% over its line is under",
+    seconds: Array(20).fill(181.5),
+    paged: false,
+    judged: { judgement: "under", p50: 181.5 },
   },
   {
-    name: "a median a second over the line is over",
+    name: "with no page open, a median more than 10% over its line is over",
+    seconds: Array(20).fill(182),
+    paged: false,
+    judged: { judgement: "over", p50: 182 },
+  },
+  {
+    name: "with no page open, a p90 10% over 200 s is under",
+    seconds: [...Array(17).fill(150), 220, 220, 220],
+    paged: false,
+    judged: { judgement: "under", p50: 150 },
+  },
+  {
+    name: "with no page open, a p90 more than 10% over 200 s is over with the median under",
+    seconds: [...Array(17).fill(150), 250, 250, 250],
+    paged: false,
+    judged: { judgement: "over", p50: 150 },
+  },
+  {
+    name: "with a page open, a median a second over its line stays over",
     seconds: Array(20).fill(166),
+    paged: true,
     judged: { judgement: "over", p50: 166 },
   },
   {
-    name: "a p90 over 200 s is over with the median under",
-    seconds: [...Array(17).fill(150), 250, 250, 250],
+    name: "with a page open, a p90 a second over 200 s stays over",
+    seconds: [...Array(17).fill(150), 201, 201, 201],
+    paged: true,
     judged: { judgement: "over", p50: 150 },
   },
-])("$name", ({ seconds, judged }) => {
+  {
+    name: "with a page open, both on their lines are under",
+    seconds: [...Array(17).fill(165), 200, 200, 200],
+    paged: true,
+    judged: { judgement: "under", p50: 165 },
+  },
+])("$name", ({ seconds, paged, judged }) => {
   const pushes = seconds.map((value, minute) =>
     push({ seconds: value, e2e: "slow-rows-skipped", minute }),
   );
@@ -455,25 +490,26 @@ test.for([
         from: Date.parse("2026-09-24T12:00:00Z"),
         to: Date.parse("2026-09-24T13:00:00Z"),
       }),
+      paged,
     ),
   ).toEqual(judged);
-  expect(LINES).toEqual({ p50: 165, p90: 200, worse: 20, minPushes: 20 });
+  expect(LINES).toEqual({ p50: 165, p90: 200, margin: 0.1, worse: 20, minPushes: 20 });
 });
 
 test.for([
   {
     name: "over before any page posts one",
     lastPage: undefined,
-    judged: { judgement: "over", p50: 170 },
+    judged: { judgement: "over", p50: 185 },
     kind: "post",
-    next: { judgement: "over", bestP50: 170 },
+    next: { judgement: "over", bestP50: 185 },
   },
   {
     name: "over after a resolution posts a page",
     lastPage: { judgement: "under", bestP50: 150 },
-    judged: { judgement: "over", p50: 170 },
+    judged: { judgement: "over", p50: 185 },
     kind: "post",
-    next: { judgement: "over", bestP50: 170 },
+    next: { judgement: "over", bestP50: 185 },
   },
   {
     name: "still over, 20 s over the best since the page, edits it",
@@ -558,29 +594,60 @@ test("a median that recovers while over and then rises more than 20 s escalates 
   expect(lastPage).toEqual({ judgement: "over", bestP50: 202.9 });
 });
 
-test("over, then worse, then under: a page, its escalation broadcast in its thread, its resolution", () => {
+test("over, then worse, then under: a page, its escalation in its thread, its resolution", () => {
   let lastPage: Parameters<typeof pageFor>[0];
   // 20 green pushes that skipped the slow rows each hour, from `fastest` s up
-  const updates = [170, 200, 140].flatMap((fastest) => {
+  const updates = [175, 205, 140].flatMap((fastest) => {
     const summary = summarizePushes(
       Array.from({ length: 20 }, (_, minute) =>
         push({ seconds: fastest + minute, e2e: "slow-rows-skipped", minute }),
       ),
       { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
     );
-    const owed = pageFor(lastPage, judge(summary));
+    const owed = pageFor(lastPage, judge(summary, lastPage?.judgement === "over"));
     const update = owed.kind && renderPage({ kind: owed.kind, summary, lastPage });
     lastPage = owed.lastPage;
     return update ? [update] : [];
   });
   expect(updates).toMatchObject([
-    { kind: "post", page: { what: "PR time to green over its lines: p50 180 s, p90 187 s" } },
+    { kind: "post", page: { what: "PR time to green over its lines: p50 185 s, p90 192 s" } },
     {
       kind: "escalate",
-      broadcast: true,
-      news: "PR time to green more than 20 s worse again: p50 210 s; 180 s at best since the page",
+      news: "PR time to green more than 20 s worse again: p50 215 s; 185 s at best since the page",
     },
     { kind: "resolve", why: "PR time to green back under its lines: p50 150 s, p90 157 s" },
+  ]);
+});
+
+// The hourly health job's check over PR time to green's medians as they sat on the 165 s line: 10%
+// past it a page opens, and once open only a median back under the line itself resolves it.
+test("a median that hovers around its line pages once and resolves once", async () => {
+  let lastPage: TtgMemory["lastPage"];
+  const told: Array<{ p50: number; kind: string | null }> = [];
+  for (const p50 of [169, 179, 185, 170, 166, 160, 175]) {
+    const checked = await checkTtg({
+      // Depot lists no PR run the check has not measured: it judges the pushes it remembers
+      depot: async () => ({ runs: [] }),
+      memory: {
+        pushes: Array.from({ length: 20 }, (_, minute) =>
+          push({ seconds: p50, e2e: "slow-rows-skipped", minute }),
+        ),
+        lastPage,
+      },
+      now: Date.parse("2026-09-24T13:00:00Z"),
+      testRun: false,
+    });
+    lastPage = checked.memory.lastPage;
+    told.push({ p50, kind: checked.update?.kind || null });
+  }
+  expect(told).toEqual([
+    { p50: 169, kind: null },
+    { p50: 179, kind: null },
+    { p50: 185, kind: "post" },
+    { p50: 170, kind: "edit" },
+    { p50: 166, kind: "edit" },
+    { p50: 160, kind: "resolve" },
+    { p50: 175, kind: null },
   ]);
 });
 

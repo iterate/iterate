@@ -54,9 +54,9 @@ import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import {
   escalationText,
   getSlackClient,
-  markResolved,
   pageChannel,
   pageText,
+  resolvedPageText,
   resolvedText,
   updatePage,
 } from "../ci/slack.ts";
@@ -75,7 +75,7 @@ export const stateArtifacts = {
 };
 
 /** Each open page, by its signal: its Slack ts in its channel, and its text as last posted, which
- *  its resolution marks resolved. */
+ *  its resolution edits to say resolved. */
 export const OpenPages = z.record(z.string(), z.object({ ts: z.string(), text: z.string() }));
 export type OpenPages = z.infer<typeof OpenPages>;
 
@@ -122,20 +122,21 @@ export function readMainE2eState(previous: unknown): MainE2eState {
   return MainE2eState.parse(previous);
 }
 
-/** What `sendUpdates` needs of Slack, in the pages' channel: post a message, or a reply in a
- *  page's thread (sent to the channel too when `broadcast`), answering its ts; edit one, answering
- *  "gone" when Slack can no longer edit it (../ci/slack.ts `updatePage`). */
+/** What `sendUpdates` needs of Slack, in the pages' channel: post a message, or a reply in the
+ *  thread of the page at `threadTs`, answering its ts; edit one, answering "gone" when Slack can no
+ *  longer edit it (../ci/slack.ts `updatePage`). */
 export type PagePoster = {
-  post(text: string, thread?: { ts: string; broadcast: boolean }): Promise<string>;
+  post(text: string, threadTs?: string): Promise<string>;
   update(ts: string, text: string): Promise<"edited" | "gone">;
 };
 
 /** Send the checks' updates in order, each to its signal's page in `pages`, and return the pages
- *  open after them. A resolution edits the page before it replies, so a failed edit sends no reply
- *  and the next run owes both again. An update whose signal has no open page, or whose page is
- *  gone, posts top-level: an edit or escalation a new page, with the escalation's reply in its
- *  thread; a resolution its reply, when the page is gone or the run is a test run's. A real run's
- *  resolution with no open page sends nothing: no page of this job is open to resolve. */
+ *  open after them. A resolution only edits the page to say resolved and why (resolvedPageText),
+ *  which notifies nobody. A page Slack can no longer edit leaves `pages` with nothing sent. With no
+ *  open page a resolution sends nothing, except a test run's, posted top-level in #ci. An
+ *  escalation replies in the page's thread and never to the channel. An edit or escalation whose
+ *  signal has no open page, or whose page is gone, opens a new page, the escalation's reply in its
+ *  thread. */
 export async function sendUpdates(
   poster: PagePoster,
   input: { updates: PageUpdate[]; pages: OpenPages; testRun: boolean },
@@ -151,13 +152,8 @@ export async function sendUpdates(
   for (const update of input.updates) {
     const page = pages[update.signal];
     if (update.kind === "resolve" || update.kind === "replace") {
-      if (page) {
-        const edited = (await poster.update(page.ts, markResolved(page.text))) === "edited";
-        await poster.post(
-          resolvedText(update.why, testRun),
-          edited ? { ts: page.ts, broadcast: false } : undefined,
-        );
-      } else if (testRun) await poster.post(resolvedText(update.why, testRun));
+      if (page) await poster.update(page.ts, resolvedPageText(page.text, update.why));
+      else if (testRun) await poster.post(resolvedText(update.why, testRun));
       delete pages[update.signal];
       if (update.kind === "replace") await open(update.signal, textOf(update.page));
       continue;
@@ -167,11 +163,7 @@ export async function sendUpdates(
       update.kind !== "post" && page && (await poster.update(page.ts, text)) === "edited";
     const ts = edited ? page.ts : await open(update.signal, text);
     pages[update.signal] = { ts, text };
-    if (update.kind === "escalate")
-      await poster.post(escalationText(update.news, testRun), {
-        ts,
-        broadcast: update.broadcast,
-      });
+    if (update.kind === "escalate") await poster.post(escalationText(update.news, testRun), ts);
   }
   return pages;
 }
@@ -471,14 +463,9 @@ function slackPoster(testRun: boolean): PagePoster {
   const slack = getSlackClient();
   const channel = pageChannel(testRun);
   return {
-    async post(text, thread) {
-      // Slack's types take a broadcast reply and a plain one as two shapes
-      const posted = await slack.chat.postMessage(
-        thread?.broadcast
-          ? { channel, text, thread_ts: thread.ts, reply_broadcast: true }
-          : { channel, text, thread_ts: thread?.ts },
-      );
-      console.log(`[health] posted ${posted.ts}${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
+    async post(text, threadTs) {
+      const posted = await slack.chat.postMessage({ channel, text, thread_ts: threadTs });
+      console.log(`[health] posted ${posted.ts}${threadTs ? ` in ${threadTs}` : ""}:\n${text}`);
       return z.string().parse(posted.ts);
     },
     async update(ts, text) {
@@ -494,8 +481,8 @@ function slackPoster(testRun: boolean): PagePoster {
 function printingPoster(): PagePoster {
   let posts = 0;
   return {
-    async post(text, thread) {
-      console.log(`\n[dry run] post${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
+    async post(text, threadTs) {
+      console.log(`\n[dry run] post${threadTs ? ` in ${threadTs}` : ""}:\n${text}`);
       return `dry-run-${++posts}`;
     },
     async update(ts, text) {
@@ -541,4 +528,4 @@ export async function previousState(options: {
   );
 }
 
-void createCli({ ...import.meta, name: "health" }).run();
+void createCli(import.meta).run();

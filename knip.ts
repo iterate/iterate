@@ -26,11 +26,17 @@ export default {
   },
   workspaces: {
     ".": {
-      // The config-repo templates: the platform loads worker.ts as a project's config entrypoint,
-      // agents.ts as the module the agents app's facets load their classes from, and voice.ts as
-      // voice's service and relay.
-      entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
-      project: ["*.ts", "configs/**/*.{ts,js}"],
+      // The config-repo templates, core's and iterate's: the platform loads worker.ts as a
+      // project's config entrypoint, agents.ts as the module the agents app's facets load their
+      // classes from, and voice.ts as voice's service and relay.
+      entry: [
+        "core/configs/*/worker.ts",
+        "core/configs/*/agents.ts",
+        "configs/*/worker.ts",
+        "configs/*/agents.ts",
+        "configs/*/voice.ts",
+      ],
+      project: ["*.ts", "core/configs/**/*.{ts,js}", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // `cloudflare:workers` parses as the "cloudflare" package.
         "cloudflare",
@@ -40,7 +46,7 @@ export default {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{context-sweep,copybara,create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,specs-shards,sync-ci-telemetry,test-evidence,test-telemetry-finalizer}.ts",
+        "ci/{context-sweep,copybara,create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,shadcn-registry,specs-shards,sync-ci-telemetry,test-evidence,test-telemetry-finalizer}.ts",
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
@@ -150,11 +156,6 @@ export default {
     },
     // The userspace apps a project installs: their export maps are the entries, and index.ts the
     // classes a project's folder re-exports.
-    "packages/agents": {
-      entry: ["src/**/*.test.ts"],
-      project: ["src/**/*.ts", "tsdown*.ts"],
-      ignoreDependencies: ["cloudflare"],
-    },
     "packages/voice": {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],

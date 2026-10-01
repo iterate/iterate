@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-com/config-voice",
+  "private": true,
+  "type": "module",
+  "main": "worker.ts",
+  "dependencies": {
+    "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@main"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260925.1",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "typescript": "^7.0.2"
+  }
+}

@@ -8,7 +8,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@iterate-com/ui/components/card";
+} from "@iterate-com/ui/components/ui/card";
 import { Identifier } from "../../../../components/identifier.tsx";
 import { httpOriginOf } from "../../../../lib/origins.ts";
 

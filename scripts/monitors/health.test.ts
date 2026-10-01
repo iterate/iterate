@@ -50,20 +50,19 @@ test.for<{
     },
   },
   {
-    name: "an escalation edits the page and replies in its thread with the mentions",
+    name: "an escalation edits the page and replies in its thread only, with the mentions",
     pages: open,
     update: {
       signal: "main e2e",
       kind: "escalate",
       page,
       news: "main e2e has new failures at `abc`: a row",
-      broadcast: false,
     },
     calls: [
       { update: "100.1", text: pageText },
       {
         post: "🚨 main e2e has new failures at `abc`: a row <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
+        thread: "100.1",
       },
     ],
     after: open,
@@ -76,20 +75,25 @@ test.for<{
     after: { "main e2e": { ts: "1", text: pageText } },
   },
   {
-    name: "a resolution marks the page resolved before it replies, and closes it",
+    name: "a resolution edits the page to say resolved and why, sends nothing else, and closes it",
     pages: open,
     update: { signal: "main e2e", kind: "resolve", why: "main e2e green again at `abc`" },
     calls: [
-      { update: "100.1", text: pageText.replace("🚨 ", "✅ resolved: ") },
       {
-        post: "✅ resolved: main e2e green again at `abc` <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
+        update: "100.1",
+        text: [
+          "✅ resolved: main e2e red at `012345678` <@U067G4QRFK2> <@U099JH9TAF2>",
+          "✅ main e2e green again at `abc`",
+          "Impact: failed: E2E tests",
+          "Do: fix or revert `012345678`",
+          "<https://depot.dev/main|run>",
+        ].join("\n"),
       },
     ],
     after: {},
   },
   {
-    name: "a replacement resolves the open page and opens another",
+    name: "a replacement resolves the open page by an edit and opens another",
     pages: open,
     update: {
       signal: "main e2e",
@@ -98,16 +102,21 @@ test.for<{
       page: { ...page, what: "main e2e unjudged" },
     },
     calls: [
-      { update: "100.1", text: pageText.replace("🚨 ", "✅ resolved: ") },
       {
-        post: "✅ resolved: unjudged, on a page of its own <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
+        update: "100.1",
+        text: [
+          "✅ resolved: main e2e red at `012345678` <@U067G4QRFK2> <@U099JH9TAF2>",
+          "✅ unjudged, on a page of its own",
+          "Impact: failed: E2E tests",
+          "Do: fix or revert `012345678`",
+          "<https://depot.dev/main|run>",
+        ].join("\n"),
       },
       { post: pageText.replace("main e2e red at `012345678`", "main e2e unjudged") },
     ],
     after: {
       "main e2e": {
-        ts: "2",
+        ts: "1",
         text: pageText.replace("main e2e red at `012345678`", "main e2e unjudged"),
       },
     },
@@ -181,21 +190,18 @@ test.for<{ name: string; update: PageUpdate; calls: unknown[]; after: OpenPages 
   },
   {
     name: "an escalation of a gone page opens a new one and replies in its thread",
-    update: { signal: "main e2e", kind: "escalate", page, news: "worse", broadcast: true },
+    update: { signal: "main e2e", kind: "escalate", page, news: "worse" },
     calls: [
       { gone: "100.1" },
       { post: pageText },
-      {
-        post: "🚨 worse <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "1", broadcast: true },
-      },
+      { post: "🚨 worse <@U067G4QRFK2> <@U099JH9TAF2>", thread: "1" },
     ],
     after: { "main e2e": { ts: "1", text: pageText } },
   },
   {
-    name: "a resolution of a gone page posts its reply top-level",
+    name: "a resolution of a gone page sends nothing more",
     update: { signal: "main e2e", kind: "resolve", why: "green again" },
-    calls: [{ gone: "100.1" }, { post: "✅ resolved: green again <@U067G4QRFK2> <@U099JH9TAF2>" }],
+    calls: [{ gone: "100.1" }],
     after: {},
   },
 ])(
@@ -405,10 +411,8 @@ test("an older run that never ends fails the wait after its bound, naming the ru
   expect((Date.now() - turns.started) / 1000).toBe(AWAIT_OLDER_RUNS.boundMs / 1000);
 });
 
-/** A poster that records each call and answers each post with the next ts, "1" first; with
- *  `failUpdate`, every edit fails as Slack refuses one. */
-/** A poster that records its calls; its edits succeed, answer "gone" as a deleted page's would, or
- *  fail with another Slack error. */
+/** A poster that records its calls and answers each post with the next ts, "1" first; its edits
+ *  succeed, answer "gone" as a deleted page's would, or fail with another Slack error. */
 function fakePoster(
   options: { update?: "edited" | "gone" | "fails" } = {},
 ): PagePoster & { calls: unknown[] } {
@@ -416,8 +420,8 @@ function fakePoster(
   let posts = 0;
   return {
     calls,
-    async post(text, thread) {
-      calls.push(thread ? { post: text, thread } : { post: text });
+    async post(text, threadTs) {
+      calls.push(threadTs ? { post: text, thread: threadTs } : { post: text });
       return String(++posts);
     },
     async update(ts, text) {

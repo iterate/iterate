@@ -11,7 +11,7 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "@iterate-com/ui/components/breadcrumb";
+} from "@iterate-com/ui/components/ui/breadcrumb";
 import { useOrganizationTree } from "./organization-tree.tsx";
 
 export function DashBreadcrumbs({

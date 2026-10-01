@@ -1,50 +1,56 @@
-// config-templates.test.ts — iterate's project templates (configs/*, the platform's build input via
-// scripts/os/config-templates.ts): each names its main module, and the default and heartbeat
-// templates' `processEvent` installs what they promise, in Node.
+// config-templates.test.ts — the project templates: core's (core/configs/*, which every build
+// offers) and iterate's (configs/*, the platform's build input via scripts/os/config-templates.ts).
+// Each names its main module, and each one's `processEvent` installs what it promises, in Node.
 import { existsSync, globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
 import type { StreamEvent } from "iterate/stream/processor";
-import DefaultTemplate from "../../../configs/default/worker.ts";
-import HeartbeatTemplate from "../../../configs/heartbeat/worker.ts";
+import DefaultTemplate from "../../../core/configs/default/worker.ts";
+import VoiceTemplate from "../../../configs/voice/worker.ts";
 import { EmailProcessor } from "../../../core/os/src/email/processor.ts";
 
-test("every package.json under configs/ names its folder's main module", () => {
-  const configs = path.resolve(import.meta.dirname, "../../../configs");
-  const manifests = globSync("*/**/package.json", {
-    cwd: configs,
+test("every template's package.json names its folder's main module", () => {
+  const repo = path.resolve(import.meta.dirname, "../../..");
+  const manifests = globSync("{core/configs,configs}/*/**/package.json", {
+    cwd: repo,
     exclude: (file) => file.includes("node_modules"),
   });
   expect(manifests).toEqual(
-    expect.arrayContaining(["default/package.json", "minimal/package.json"]),
+    expect.arrayContaining([
+      "core/configs/default/package.json",
+      "core/configs/minimal/package.json",
+      "configs/voice/package.json",
+    ]),
   );
   for (const manifest of manifests) {
-    const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
+    const { main } = JSON.parse(readFileSync(path.join(repo, manifest), "utf8")) as {
       main?: string;
     };
     expect(main, manifest).toBeTruthy();
-    expect(existsSync(path.join(configs, path.dirname(manifest), main!)), manifest).toBe(true);
+    expect(existsSync(path.join(repo, path.dirname(manifest), main!)), manifest).toBe(true);
   }
 });
 
+const agentsRule = { "itx.agents": expect.objectContaining({ match: "itx.agents" }) };
+
 test.for([
-  { template: "default", Template: DefaultTemplate, schedules: {} },
+  { template: "default", Template: DefaultTemplate, rules: agentsRule, schedules: {} },
   {
-    template: "heartbeat",
-    Template: HeartbeatTemplate,
-    schedules: {
-      heartbeat: {
-        when: { everyMs: 300_000 },
-        events: [{ type: "heartbeat" }],
-        scheduledAtOffset: 1,
-      },
+    template: "voice",
+    Template: VoiceTemplate,
+    rules: {
+      ...agentsRule,
+      "itx.voice": expect.objectContaining({
+        target: ["itx", "workers", ["get", expect.objectContaining({ mainModule: "voice.ts" })]],
+      }),
     },
+    schedules: {},
   },
 ])(
-  "$template: the platform's project/worker-updated installs agents, voice and the template's schedules",
-  async ({ Template, schedules }) => {
+  "$template: the platform's project/worker-updated installs the template's apps and schedules",
+  async ({ Template, rules: expectedRules, schedules }) => {
     const project = fakeProject(Template);
     await project.deliver({
       type: "events.iterate.com/project/worker-updated",
@@ -53,12 +59,7 @@ test.for([
     });
     const { rules, rows } = project;
     expect({ rules, rows, schedules: project.schedules }).toEqual({
-      rules: {
-        "itx.agents": expect.objectContaining({ match: "itx.agents" }),
-        "itx.voice": expect.objectContaining({
-          target: ["itx", "workers", ["get", expect.objectContaining({ mainModule: "voice.ts" })]],
-        }),
-      },
+      rules: expectedRules,
       rows: { agents: expect.objectContaining({ className: "AgentCollectionDurableObject" }) },
       schedules,
     });

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "iterate",
+  "homepage": "https://github.com/iterate/packages",
+  "include": ["packages/ui/registry.json"]
+}
