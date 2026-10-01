@@ -2,14 +2,15 @@
 // one `writeDataPoint` per call, which never blocks and is never awaited. Call it once per batch,
 // never once per item.
 
-/** The metrics of one source: the Worker that writes them (its `WORKER_NAME` var: the runtime does
- *  not tell a Worker its own name), and the context they belong to, if any. With no dataset bound
- *  (local dev, tests) nothing is written. */
+/** A Worker's metrics, from its env: the `METRICS` Analytics Engine dataset, and its `WORKER_NAME`
+ *  var (the runtime does not tell a Worker its own name); for the context they belong to, if any.
+ *  With no dataset bound (local dev, tests) nothing is written. */
 export function metrics(
-  dataset: AnalyticsEngineDataset | undefined,
-  source: { worker: string; projectId?: string; path?: string },
+  env: { METRICS?: AnalyticsEngineDataset; WORKER_NAME: string },
+  context: { projectId?: string; path?: string } = {},
 ) {
-  const { worker, projectId = null, path = null } = source;
+  const { METRICS: dataset, WORKER_NAME: worker } = env;
+  const { projectId = null, path = null } = context;
   const write = (name: string, kind: string, value: number, labels = "") => {
     try {
       // `index1` is the project, so a busy project cannot crowd a quiet one's samples out. The

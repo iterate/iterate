@@ -62,22 +62,31 @@ test.for([
   },
 ])("$name", ({ source, call, point }) => {
   const points: AnalyticsEngineDataPoint[] = [];
-  call(metrics({ writeDataPoint: (written) => void points.push(written!) }, source));
+  const { worker, ...context } = source;
+  const METRICS = {
+    writeDataPoint: (written?: AnalyticsEngineDataPoint) => void points.push(written!),
+  };
+  call(metrics({ METRICS, WORKER_NAME: worker }, context));
   // exact: the blob layout is what every query reads, and can only grow at the end
   expect(points).toEqual([point]);
 });
 
 test("with no dataset bound, a call writes nothing and throws nothing", () => {
-  expect(() => metrics(undefined, context).count("subscription.retries", 1)).not.toThrow();
+  expect(() =>
+    metrics({ WORKER_NAME: context.worker }, context).count("subscription.retries", 1),
+  ).not.toThrow();
 });
 
 test("a point past the invocation's limit is dropped, and only the first drop warns", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const full = metrics(
     {
-      writeDataPoint: () => {
-        throw new Error("Too many data points written in this invocation");
+      METRICS: {
+        writeDataPoint: () => {
+          throw new Error("Too many data points written in this invocation");
+        },
       },
+      WORKER_NAME: context.worker,
     },
     context,
   );

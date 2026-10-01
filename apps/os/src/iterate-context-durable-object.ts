@@ -1248,8 +1248,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
-    metrics: metrics(this.env.METRICS, {
-      worker: this.env.WORKER_NAME,
+    metrics: metrics(this.env, {
       projectId: this.#durableObjectAddress.projectId,
       path: this.#durableObjectAddress.path,
     }),

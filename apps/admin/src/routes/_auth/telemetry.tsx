@@ -1,8 +1,15 @@
 // /telemetry — the platform's live metrics (docs/telemetry.md "Reading"): each panel one flat
 // Analytics Engine SQL query over the hours the URL names, read in the app's Worker with its metrics
-// token (APP_CONFIG `metrics`).
+// token (APP_CONFIG `metrics`), charted with TanStack Charts, and footed with what it covered and
+// what it cost.
+import { colorLegend, defineChart, lineY } from "@tanstack/charts";
+import { Chart } from "@tanstack/charts/react";
+import { scaleLinear } from "@tanstack/charts/scales/linear";
+import { scaleOrdinal } from "@tanstack/charts/scales/ordinal";
+import { tooltip } from "@tanstack/charts/tooltip";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { useMemo } from "react";
 import { z } from "zod";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
@@ -15,20 +22,41 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 
-/** THE PANELS by title, each over `iterate_metrics` (docs/telemetry.md "Metrics": blob1…6 are name,
- *  kind, worker, project, path and labels, double1 the value), weighted by `_sample_interval` since
- *  Analytics Engine samples. `{hours}` is the range, and a chart's bucket `t` is as many minutes, so
- *  it has 60 points. */
-const PANELS = {
-  "subscription.delivery_ms p50 and p99 (ms)":
-    "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, quantileExactWeighted(0.5)(double1, _sample_interval) AS p50, quantileExactWeighted(0.99)(double1, _sample_interval) AS p99 FROM iterate_metrics WHERE blob1 = 'subscription.delivery_ms' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
-  "subscription.pending, the ten deepest rows":
-    "SELECT blob4 AS project_id, blob5 AS path, blob6 AS labels, max(double1) AS max FROM iterate_metrics WHERE blob1 = 'subscription.pending' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY project_id, path, labels HAVING max > 0 ORDER BY max DESC LIMIT 10",
-  "subscription.retries per minute":
-    "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, sum(_sample_interval * double1) / {hours} AS retries FROM iterate_metrics WHERE blob1 = 'subscription.retries' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
-  "Metric points per worker":
-    "SELECT blob3 AS worker, sum(_sample_interval) AS points, count() AS stored FROM iterate_metrics WHERE timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY worker ORDER BY points DESC LIMIT 20",
-};
+/** THE PANELS, each over `iterate_metrics` (docs/telemetry.md "Metrics": blob1…6 are name, kind,
+ *  worker, project, path and labels, double1 the value), weighted by `_sample_interval` since
+ *  Analytics Engine samples, and `reads` the metric it covers (every one when unset). `{hours}` is
+ *  the range, and a chart's bucket `t` is as many minutes, so it has 60 points. */
+const PANELS: { title: string; reads?: string; sql: string }[] = [
+  {
+    title: "subscription.delivery_ms p50 and p99 (ms)",
+    reads: "subscription.delivery_ms",
+    sql: "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, quantileExactWeighted(0.5)(double1, _sample_interval) AS p50, quantileExactWeighted(0.99)(double1, _sample_interval) AS p99 FROM iterate_metrics WHERE blob1 = 'subscription.delivery_ms' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
+  },
+  {
+    title: "subscription.pending, the ten deepest rows",
+    reads: "subscription.pending",
+    sql: "SELECT blob4 AS project_id, blob5 AS path, blob6 AS labels, max(double1) AS max FROM iterate_metrics WHERE blob1 = 'subscription.pending' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY project_id, path, labels HAVING max > 0 ORDER BY max DESC LIMIT 10",
+  },
+  {
+    title: "subscription.retries per minute",
+    reads: "subscription.retries",
+    sql: "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, sum(_sample_interval * double1) / {hours} AS retries FROM iterate_metrics WHERE blob1 = 'subscription.retries' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
+  },
+  {
+    title: "Metric points per worker",
+    sql: "SELECT blob3 AS worker, sum(_sample_interval) AS points, count() AS stored FROM iterate_metrics WHERE timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY worker ORDER BY points DESC LIMIT 20",
+  },
+];
+
+/** WHAT EACH PANEL COVERS: every metric's stored points in the range, and the points they stand
+ *  for. Analytics Engine answers with no count of what a query read, so this is the measure. */
+const CENSUS =
+  "SELECT blob1 AS name, count() AS stored, sum(_sample_interval) AS written FROM iterate_metrics WHERE timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY name";
+
+/** Analytics Engine bills a read query $1.00 per million past the million a month included, whatever
+ *  it reads (https://developers.cloudflare.com/analytics/analytics-engine/pricing/); it bills
+ *  nothing yet. */
+const QUERY_USD = 1 / 1_000_000;
 
 const Hours = z.number().int().min(1).max(168);
 /** Analytics Engine's `FORMAT JSON` answer: a UInt64 comes as a string, a Float64 as a number. */
@@ -37,7 +65,7 @@ const AnalyticsEngineAnswer = z.object({
 });
 type Row = z.infer<typeof AnalyticsEngineAnswer>["data"][number];
 
-/** Every panel's rows, or null without a metrics token, for a platform admin alone: this browser's
+/** Every panel's rows and the census, or null without a metrics token, for a platform admin alone: this browser's
  *  session at the deployment's own issuer holds the `admin` scope, which that issuer grants to its
  *  `admins` only (apps/os consent.ts). A session connected to another issuer could hold any scope. */
 const readPanels = createServerFn({ method: "GET" })
@@ -58,20 +86,24 @@ const readPanels = createServerFn({ method: "GET" })
     if (!config.metrics?.apiToken) return null;
     const { accountId, apiToken } = config.metrics;
     const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
-    return Promise.all(
-      Object.entries(PANELS).map(async ([title, sql]) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${apiToken}` },
-          body: `${sql.replaceAll("{hours}", String(hours))} FORMAT JSON`,
-        });
-        if (!response.ok)
-          throw new Error(
-            `${title}: Analytics Engine answered ${response.status}: ${await response.text()}`,
-          );
-        return AnalyticsEngineAnswer.parse(await response.json()).data;
-      }),
-    );
+    const read = async (title: string, sql: string) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}` },
+        body: `${sql.replaceAll("{hours}", String(hours))} FORMAT JSON`,
+      });
+      if (!response.ok)
+        throw new Error(
+          `${title}: Analytics Engine answered ${response.status}: ${await response.text()}`,
+        );
+      return AnalyticsEngineAnswer.parse(await response.json()).data;
+    };
+    const [census, ...panels] = await Promise.all([
+      read("census", CENSUS),
+      ...PANELS.map(({ title, sql }) => read(title, sql)),
+    ]);
+    // the charts end at the moment of the read, on the server and in the browser alike
+    return { at: Date.now(), census: census!, panels };
   });
 
 export const Route = createFileRoute("/_auth/telemetry")({
@@ -83,7 +115,7 @@ export const Route = createFileRoute("/_auth/telemetry")({
 });
 
 function TelemetryPage() {
-  const panels = Route.useLoaderData();
+  const read = Route.useLoaderData();
   const { hours } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
@@ -101,13 +133,29 @@ function TelemetryPage() {
           <NativeSelectOption value={168}>Last 7 days</NativeSelectOption>
         </NativeSelect>
       </div>
-      {panels ? (
-        Object.keys(PANELS).map((title, index) => (
-          <section key={title} className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">{title}</h2>
-            <Panel rows={panels[index]!} hours={hours} />
-          </section>
-        ))
+      {read ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            {PANELS.length + 1} Analytics Engine queries, the census of what each panel covers
+            included: {usd((PANELS.length + 1) * QUERY_USD)} at $1.00 per million. Analytics Engine
+            bills per query, whatever it reads, and bills nothing yet.
+          </p>
+          {PANELS.map(({ title, reads }, index) => {
+            const covered = read.census.filter((row) => !reads || row.name === reads);
+            const sum = (column: string) =>
+              covered.reduce((total, row) => total + Number(row[column]), 0);
+            return (
+              <section key={title} className="flex flex-col gap-2">
+                <h2 className="text-sm font-medium">{title}</h2>
+                <Panel title={title} rows={read.panels[index]!} hours={hours} at={read.at} />
+                <p className="text-xs text-muted-foreground">
+                  {format(sum("stored"))} stored points, standing for {format(sum("written"))} · 1
+                  query, {usd(QUERY_USD)}
+                </p>
+              </section>
+            );
+          })}
+        </>
       ) : (
         <p className="text-sm text-muted-foreground">
           This deployment has no metrics token (Doppler APP_CONFIG_METRICS__API_TOKEN).
@@ -121,71 +169,78 @@ function TelemetryPage() {
 const COLORS = ["#2a78d6", "#eb6834"];
 
 /** A panel's rows as a table or, when they have a bucket `t` (UTC), as one line per other column
- *  across the range up to now, from 0 to the highest value. Each line's newest point is a dot, so a
- *  line of one point shows; hovering a bucket names its values. */
-function Panel({ rows, hours }: { rows: Row[]; hours: number }) {
+ *  across the range up to the read, every bucket a point. */
+function Panel({
+  title,
+  rows,
+  hours,
+  at,
+}: {
+  title: string;
+  rows: Row[];
+  hours: number;
+  at: number;
+}) {
+  const chart = useMemo(() => {
+    if (!rows[0] || !("t" in rows[0])) return undefined;
+    const series = Object.keys(rows[0]).filter((column) => column !== "t");
+    const time = new Intl.DateTimeFormat("en-GB", {
+      ...(hours > 24 && { weekday: "short" }),
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    });
+    const points = rows.flatMap((row) =>
+      series.map((name) => ({
+        t: Date.parse(`${String(row.t).replace(" ", "T")}Z`),
+        series: name,
+        value: Number(row[name]),
+      })),
+    );
+    return defineChart({
+      marks: [lineY(points, { x: "t", y: "value", z: "series", points: true })],
+      scales: {
+        x: {
+          scale: scaleLinear().domain([at - hours * 3_600_000, at]),
+          axis: { ticks: { format: (ms) => `${time.format(ms)} UTC` } },
+        },
+        y: { scale: scaleLinear, nice: true, grid: true },
+      },
+      color: {
+        scale: scaleOrdinal<string, string>().domain(series).range(COLORS),
+        legend: colorLegend(),
+      },
+      tooltip,
+    });
+  }, [rows, hours, at]);
   if (rows.length === 0) return <p className="text-sm text-muted-foreground">No points.</p>;
+  if (chart) return <Chart definition={chart} height={220} ariaLabel={title} />;
   const columns = Object.keys(rows[0]!);
-  if (!columns.includes("t"))
-    return (
-      <Table>
-        <TableHeader>
-          <TableRow>
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          {columns.map((column) => (
+            <TableHead key={column}>{column}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row, index) => (
+          <TableRow key={index}>
             {columns.map((column) => (
-              <TableHead key={column}>{column}</TableHead>
+              <TableCell key={column} className="font-mono text-xs">
+                {format(row[column])}
+              </TableCell>
             ))}
           </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row, index) => (
-            <TableRow key={index}>
-              {columns.map((column) => (
-                <TableCell key={column} className="font-mono text-xs">
-                  {format(row[column])}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    );
-  const names = columns.filter((column) => column !== "t");
-  const max = Math.max(...rows.flatMap((row) => names.map((name) => Number(row[name])))) || 1;
-  const now = Date.now();
-  const x = (row: Row) =>
-    600 - ((now - Date.parse(`${String(row.t).replace(" ", "T")}Z`)) / (hours * 3_600_000)) * 600;
-  const y = (value: Row[string]) => 150 - (Number(value) / max) * 150;
-  return (
-    <figure className="flex flex-col gap-1">
-      <figcaption className="flex gap-4 text-xs text-muted-foreground">
-        {names.map((name, index) => (
-          <span key={name}>
-            <span style={{ color: COLORS[index] }}>●</span> {name}
-          </span>
         ))}
-        <span className="ml-auto">max {format(max)}</span>
-      </figcaption>
-      <svg viewBox="-10 -5 620 160" className="w-full">
-        <line x1={0} x2={600} y1={150} y2={150} stroke="currentColor" opacity={0.2} />
-        {names.map((name, index) => (
-          <g key={name} stroke={COLORS[index]} fill={COLORS[index]}>
-            <polyline
-              points={rows.map((row) => `${x(row)},${y(row[name])}`).join(" ")}
-              fill="none"
-              strokeWidth={2}
-            />
-            <circle cx={x(rows.at(-1)!)} cy={y(rows.at(-1)![name])} r={4} />
-          </g>
-        ))}
-        {rows.map((row) => (
-          <rect key={String(row.t)} x={x(row) - 5} width={10} height={150} fill="transparent">
-            <title>{`${row.t} UTC · ${names.map((name) => `${name} ${format(row[name])}`).join(" · ")}`}</title>
-          </rect>
-        ))}
-      </svg>
-    </figure>
+      </TableBody>
+    </Table>
   );
 }
+
+const usd = (amount: number) => `$${amount.toFixed(6)}`;
 
 function format(value: Row[string]) {
   return typeof value === "number"

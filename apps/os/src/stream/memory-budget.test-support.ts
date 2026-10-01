@@ -49,7 +49,7 @@ const facetHostPlatformEntries = {
 };
 
 /** No dataset bound, as in local dev: the loop's metrics write nothing. */
-const unboundMetrics = metrics(undefined, { worker: "memory-budget" });
+const unboundMetrics = metrics({ WORKER_NAME: "memory-budget" });
 
 /** These workloads run no background work, so the engine never claims the alarm: a stub that must
  *  never be reached. */

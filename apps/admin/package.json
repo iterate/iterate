@@ -14,6 +14,7 @@
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@tanstack/charts": "0.18.0",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
     "iterate": "workspace:*",

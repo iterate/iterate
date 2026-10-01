@@ -120,13 +120,14 @@ on its `max`, and read its latest value per path with the newest `time`.
 
 ```ts
 import { metrics } from "iterate/metrics";
-const m = metrics(env.METRICS, { worker, projectId, path });
+const m = metrics(env, { projectId, path }); // env.METRICS, and env.WORKER_NAME
 m.count("subscription.retries", 1, "row=config");
 m.gauge("subscription.pending", pending, "row=config");
 m.time("subscription.delivery_ms", ms, "row=config");
 ```
 
-Each call is one `writeDataPoint`, which never blocks and is never awaited: `index1` is the
+`WORKER_NAME` is a var every `apps/os` deployment's config sets, since the runtime does not tell a
+Worker its own name. Each call is one `writeDataPoint`, which never blocks and is never awaited: `index1` is the
 project, so a busy project cannot crowd out a quiet one's samples, and `blob1…6` are name, kind,
 worker, project, path and labels (a layout that can only grow at the end). An invocation may write
 250 points; past that `writeDataPoint` throws, so the module drops the point and logs the first
@@ -135,12 +136,17 @@ clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
 
 ## Reading
 
-- **Live** — the `/telemetry` page in `apps/admin`, and the health job's alert rules
-  (`scripts/monitors/telemetry.ts`), query Analytics Engine's SQL API. It has no CTEs, JOINs or
-  UNION: every panel and rule is one flat query.
+- **Live** — the `/telemetry` page in `apps/admin` (TanStack Charts), and the health job's alert
+  rules (`scripts/monitors/telemetry.ts`), query Analytics Engine's SQL API. It has no CTEs, JOINs
+  or UNION: every panel and rule is one flat query. Analytics Engine bills $1.00 per million read
+  queries past a million a month, whatever a query reads, and bills nothing yet; its answers say
+  nothing of what a query read, so the page counts each panel's stored points in one more query and
+  shows them beside the panel's price.
 - **History** — R2 SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
-  (1.4+) attached to the catalog. R2 SQL reads only the columns a query names: one project's week of
-  logs reads that week's `project_id` column, a few MB.
+  (1.4+) attached to the catalog. R2 SQL reads only the columns a query names, from the files whose
+  statistics its filters cannot rule out, and answers with the bytes it scanned: $2.50 per TB, 10
+  MB at least. Nothing is sorted, so a filter on an id (a trace, a project) reads that column of
+  every file in range: bound such a query by `time`.
 
 ## Settings
 
@@ -192,40 +198,51 @@ schema cannot change and a sink cannot adopt an existing table, so a column chan
 ## Queries
 
 Each ran on PR 3478's preview (`pr3478-7cede58`, 2026-09-30) with `wrangler r2 sql query` or the
-HTTP API, and the catalog token. `offset` is a reserved word: quote it, `"offset"`.
+HTTP API, and the catalog token; what each scanned and cost was measured on 2026-10-01, once
+compaction had merged each table's files into six. R2 SQL answers every query with the bytes it
+scanned, and bills $2.50 per TB of them, 10 MB at least, past the 10 GB a month included. `offset`
+is a reserved word: quote it, `"offset"`.
 
 ```sql
--- the event types a deployment wrote, and how big their payloads are (844 KB scanned)
+-- the event types a deployment wrote, and how big their payloads are
+-- scanned 768 KB in 6 files, billed as 10 MB: $0.000025
 SELECT type, count(*) AS n, approx_median(payload_bytes) AS median_bytes, max(payload_bytes)
 FROM telemetry.events WHERE worker LIKE 'pr3478-%' GROUP BY type ORDER BY n DESC LIMIT 12
 
 -- a field of the payload, by type: why contexts woke (call 1,230, alarm 27)
+-- scanned 605 KB in 6 files, billed as 10 MB: $0.000025
 SELECT CASE WHEN payload_bytes < 2000 THEN json_get_str(payload, 'cause') END AS cause, count(*)
 FROM telemetry.events WHERE type = 'events.iterate.com/itx/woken' GROUP BY 1
 
 -- one project's newest events (reads project_id, path, type and "offset", never payload)
+-- scanned 246 KB in 6 files, billed as 10 MB: $0.000025
 SELECT path, type, "offset" FROM telemetry.events
 WHERE project_id = 'prj_d43815cd66c840d6b6251432f792c3b7' ORDER BY "offset" DESC LIMIT 3
 
 -- what a deployment logged, by level and event
+-- scanned 148 KB in 6 files, billed as 10 MB: $0.000025
 SELECT level, event, count(*) AS n FROM telemetry.logs WHERE worker LIKE 'pr3478-%'
 GROUP BY level, event ORDER BY n DESC LIMIT 10
 
 -- latency by RPC method
+-- scanned 2.6 MB in 6 files, billed as 10 MB: $0.000025
 SELECT rpc_method, count(*) AS n, approx_percentile_cont(duration_ms, 0.5) AS p50,
   approx_percentile_cont(duration_ms, 0.99) AS p99
 FROM telemetry.spans WHERE rpc_method IS NOT NULL GROUP BY rpc_method ORDER BY n DESC
 
 -- a log line's context from its span, when the line did not name it
+-- scanned 16.3 MB in 12 files: $0.000041
 SELECT coalesce(l.project_id, s.project_id) AS project_id, l.event, count(*) AS n
 FROM telemetry.logs l JOIN telemetry.spans s ON l.span_id = s.span_id
 WHERE l.level = 'warn' GROUP BY 1, 2 ORDER BY n DESC
 
 -- one trace, the Worker's spans and the Durable Object's under them
+-- scanned 12.4 MB in 6 files: $0.000031
 SELECT time, span_id, parent_span_id, name, entrypoint, rpc_method, path, duration_ms
 FROM telemetry.spans WHERE trace_id = 'e7668882ead36f4184d0d419c6ad435f' ORDER BY time
 
 -- a metric's weighted p99 by hour (Analytics Engine sampled it: weigh every point)
+-- scanned 36 KB in 6 files, billed as 10 MB: $0.000025
 SELECT date_trunc('hour', time) AS hour,
   approx_percentile_cont_with_weight(value, weight, 0.99) AS p99, sum(weight) AS deliveries
 FROM telemetry.metrics WHERE name = 'subscription.delivery_ms' GROUP BY 1 ORDER BY 1
