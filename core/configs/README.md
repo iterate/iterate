@@ -10,9 +10,9 @@ is configured.
   (`project/worker-updated`) calls `installAgents(itx)`, which names that module of the published
   config, so a commit that doesn't change it leaves the agents running; its `email/received` case
   gives each email thread from a member an agent of its own. It sets no schedule: an idle project
-  sleeps.
-- `heartbeat/` — `default/` plus a heartbeat its init case sets, a schedule that appends
-  `heartbeat` on `/` every five minutes and wakes the project each time.
+  sleeps. Its init case holds a heartbeat, commented out: uncommented, a schedule that appends
+  `heartbeat` on `/` every five minutes and wakes the project each time. The dash and the consent
+  page start a person's project from this one.
 - `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules. A creation that
   names no template gets this one.
 
@@ -33,7 +33,8 @@ The build (`os/scripts/build.ts`) lists each one under its GitHub reference at t
 commit, in the repository the checkout's `origin` names
 (`github:iterate/core#<sha>&path:core/configs/default` in a clone of iterate/core), and a creation
 naming that reference is seeded from the build's copy, with no GitHub request.
-`session.projects.templates()` lists them beside any template the build was given with
-`--template`. `projects.create({ project, configRepoTemplate })` also accepts custom references
-such as `github:owner/repo#main&path:templates/example`; the API resolves the ref to a commit
-before persisting the creation request.
+`session.projects.templates()` lists them, `default/` first, then any template the build was given
+with `--template`. The build fails without `default/`.
+`projects.create({ project, configRepoTemplate })` also accepts custom references such as
+`github:owner/repo#main&path:templates/example`; the API resolves the ref to a commit before
+persisting the creation request.

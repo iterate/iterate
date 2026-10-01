@@ -8,7 +8,6 @@ import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
 import type { StreamEvent } from "iterate/stream/processor";
 import DefaultTemplate from "../../../core/configs/default/worker.ts";
-import HeartbeatTemplate from "../../../core/configs/heartbeat/worker.ts";
 import VoiceTemplate from "../../../configs/voice/worker.ts";
 import { EmailProcessor } from "../../../core/os/src/email/processor.ts";
 
@@ -38,18 +37,6 @@ const agentsRule = { "itx.agents": expect.objectContaining({ match: "itx.agents"
 
 test.for([
   { template: "default", Template: DefaultTemplate, rules: agentsRule, schedules: {} },
-  {
-    template: "heartbeat",
-    Template: HeartbeatTemplate,
-    rules: agentsRule,
-    schedules: {
-      heartbeat: {
-        when: { everyMs: 300_000 },
-        events: [{ type: "heartbeat" }],
-        scheduledAtOffset: 1,
-      },
-    },
-  },
   {
     template: "voice",
     Template: VoiceTemplate,

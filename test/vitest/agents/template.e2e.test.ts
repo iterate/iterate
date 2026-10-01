@@ -17,7 +17,7 @@ test("a project on the Default preset lists no packages, its init installs the p
     "the init case installed agents",
     async () => (await root.rewriteRules.get("itx.agents"))?.target,
   );
-  // the default sets no schedule: an idle project sleeps (core/configs/heartbeat sets one)
+  // the default sets no schedule: an idle project sleeps (its heartbeat is commented out)
   expect(await root.schedules.list()).toEqual([]);
   const path = "/agents/first";
   const agent = root.cd(path);

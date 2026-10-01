@@ -158,17 +158,24 @@ function coreConfigTemplates(): ConfigTemplate[] {
     );
   const [, owner, repo] = repository;
   const commit = git("rev-parse", "HEAD");
-  return readdirSync(coreConfigs, { withFileTypes: true })
+  const names = readdirSync(coreConfigs, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => ({
-      reference: formatConfigRepoTemplateReference({
-        owner: owner!,
-        repo: repo!,
-        ref: commit,
-        path: `core/configs/${entry.name}`,
-      }),
-      files: trackedFiles(path.join(coreConfigs, entry.name)),
-    }));
+    .map((entry) => entry.name);
+  // `default` first: the generated `templates` promises it there, and the dash and the consent page
+  // start a person's project from it
+  if (!names.includes("default"))
+    throw new Error(
+      "core/configs/default is missing: the dash and the consent page start a person's project from it",
+    );
+  return ["default", ...names.filter((name) => name !== "default")].map((name) => ({
+    reference: formatConfigRepoTemplateReference({
+      owner: owner!,
+      repo: repo!,
+      ref: commit,
+      path: `core/configs/${name}`,
+    }),
+    files: trackedFiles(path.join(coreConfigs, name)),
+  }));
 }
 
 /** A folder's files as git tracks them: not the node_modules/ an `npm install` for a local `tsc`
@@ -180,7 +187,7 @@ function trackedFiles(folder: string) {
     .map((file) => ({ path: file, content: readFileSync(path.join(folder, file), "utf8") }));
 }
 
-/** A template's name in the dash: its folder (`core/configs/heartbeat` ⇒ `Heartbeat`), else its repo. */
+/** A template's name in the dash: its folder (`core/configs/default` ⇒ `Default`), else its repo. */
 function labelOf(reference: string) {
   const { repo, path: folder } = parseConfigRepoTemplateReference(reference);
   const name = folder?.split("/").at(-1) || repo;

@@ -37,8 +37,7 @@ CLOUDFLARE_ENV=self-host pnpm --filter os build
 ```
 
 The deployment offers core's project templates (`core/configs/`). A new project, the user's first
-included, starts from `default`: the agents app. A bare homepage ("Blank" in the dash) is always
-offered too.
+included, starts from `default`: the agents app. A bare homepage (`minimal`) is always offered too.
 
 ## 2. Log in
 
