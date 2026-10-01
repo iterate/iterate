@@ -1,17 +1,17 @@
 ---
 status: review
 size: large
-base: core-copy (#3493)
+base: main
 ---
 
 # Core's configs live in core; agents is `iterate/agents`
 
 From Misha and Jonas's Tuple call (2026-10-01): configs that depend only on core go in
 `iterate/core` as starter examples and documentation; the default config must depend on nothing
-outside core. Stacked on #3493 (the public copies), which predates the call and still bakes
+outside core. It follows #3493 (the public copies, merged), which predates the call and baked
 `configs/default` and `configs/heartbeat` from iterate/packages with `--template`.
 
-Status: implemented, checked locally; no PR yet (Misha: "no PR"). Agents is `iterate/agents`,
+Status: implemented, rebased on main after #3493 merged, checked locally; no PR yet (Misha: "no PR"). Agents is `iterate/agents`,
 core's configs live in `core/configs` and every build bakes them, voice is the `configs/voice`
 template. Typecheck, lint, knip, format, the touched packages' unit tests, the Workers rows and the
 agents e2e rows pass locally. Not run: CI, a preview, and the deployed-only voice rows and the
