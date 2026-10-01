@@ -12,7 +12,7 @@
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
-import type {} from "@iterate-com/agents";
+import type {} from "iterate/agents";
 import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { startVoiceCall } from "@iterate-com/voice/call";
@@ -214,4 +214,4 @@ export default async function voiceCall(
   );
 }
 
-void createCli({ ...import.meta, name: "voice-call" }).run();
+void createCli(import.meta).run();

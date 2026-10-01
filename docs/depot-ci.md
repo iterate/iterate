@@ -52,7 +52,7 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
 - `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
-  `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
+  `@iterate-com/petshop-sdk`, `@iterate-com/voice`,
   `@iterate-com/github-sync` and `@iterate-com/ai-linter` packages to
   [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes their inputs
   (their folders, `core/lib` and `packages/*`, `packages/shared`, the root manifests and lockfile, or the workflow
@@ -330,7 +330,7 @@ branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
 - A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
   `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with
-  `createCli({ ...import.meta })` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  `createCli(import.meta)` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
   `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
   not install.

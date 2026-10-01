@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { resolveContextPath } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import type { ContextPathLinks } from "../components/context-view/context-path.tsx";
+import type { ContextPathLinks } from "#/components/context-view/context-path.tsx";
 
 /** A splat route's tail as a context path, canonical as `cd` reads it (`resolveContextPath`, the
  *  SDK's one resolver): `` → `/`, `repos/config/` → `/repos/config`. */

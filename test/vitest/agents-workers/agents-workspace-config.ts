@@ -1,19 +1,12 @@
-// The agents app as a project's config over this checkout's source, no publish or esm.sh needed; it
-// imports nothing, so the e2e and Workers suites both load it. The published package is template.e2e's.
+// The agents app as a project's config: `iterate/agents` comes from the platform, so the platform
+// under test runs this checkout's agents. It imports nothing else, so the e2e and Workers suites
+// both load it.
 
-/** A config shaped as configs/default: `worker.ts` ignores every event, `agents.ts` holds the classes. */
+/** A config shaped as core/configs/default: `worker.ts` ignores every event, `agents.ts` holds the classes. */
 export const agentsWorkspaceConfig: Record<string, string> = {
   "package.json": '{"main":"worker.ts"}',
   "worker.ts":
     'import { IterateConfigEntrypoint } from "iterate/sdk";\nexport default class extends IterateConfigEntrypoint {}\n',
-  "agents.ts": 'export { AgentCollectionDurableObject, AgentDurableObject } from "./index.ts";\n',
-  ...Object.fromEntries(
-    Object.entries(
-      import.meta.glob<string>(["../../../packages/agents/src/*.ts", "!**/*.test.ts"], {
-        query: "?raw",
-        import: "default",
-        eager: true,
-      }),
-    ).map(([path, text]) => [path.slice(path.lastIndexOf("/") + 1), text]),
-  ),
+  "agents.ts":
+    'export { AgentCollectionDurableObject, AgentDurableObject } from "iterate/agents";\n',
 };

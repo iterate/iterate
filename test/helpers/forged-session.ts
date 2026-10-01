@@ -19,12 +19,20 @@ export async function createProjectFixture(
     operator: OperatorSession;
     /** A client app (any URL on its origin) to sign in to and open on the project's page. */
     app?: string;
+    /** The preset the project starts from, by its label in the dash: Default, the dash's own
+     *  choice, when omitted. */
+    preset?: string;
   },
 ) {
   const slug = uniqueFixtureSlug(slugPrefix);
   const email = `forged-${slug}@example.com`;
   await mintIterateSession({ email, page: input.page });
-  const project = await createOwnedProject({ operator: input.operator, email, slug });
+  const project = await createOwnedProject({
+    operator: input.operator,
+    email,
+    slug,
+    preset: input.preset || "Default",
+  });
   if (input.app) await signInToApp({ page: input.page, app: input.app, project });
 
   return {
@@ -114,15 +122,18 @@ async function createOwnedProject(input: {
   operator: OperatorSession;
   email: string;
   slug: string;
+  preset: string;
 }) {
   // create() answers once the project's creation is requested, before its saga lands
   // `project/created`: an app's page may open on a project still being created.
   return test.step("create project fixture over /api", async () => {
     // Created as that person, so it lands in an organization they own; its minted id is how a
-    // project is addressed — the slug only labels its hosts.
-    const { projectId } = await input.operator
-      .authenticate({ email: input.email })
-      .projects.create({ project: input.slug })
+    // project is addressed — the slug only labels its hosts. With the Default preset (the agents
+    // app) it is what the dash creates for a person who picks no template.
+    const projects = input.operator.authenticate({ email: input.email }).projects;
+    const preset = (await projects.templates()).find(({ label }) => label === input.preset);
+    const { projectId } = await projects
+      .create({ project: input.slug, configRepoTemplate: preset?.reference })
       .whoami();
     return { id: projectId, slug: input.slug };
   });

@@ -23,9 +23,10 @@ on:
       - "!core/os/docs/**"
       - "!core/os/**/*.test.ts"
       - "!core/os/scripts/preview*.ts"
+      # the templates the Worker embeds: core's, and iterate's with voice pinned at the deployed commit
+      - core/configs/**
       - configs/**
-      # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
-      - packages/agents/**
+      - packages/voice/**
       - core/lib/**
       - envs.ts
       - scripts/lib/**
@@ -109,3 +110,29 @@ jobs:
           APP_DISPLAY_NAME: OS
           UPLOADED: ${{ steps.deploy.outcome }}
         run: node scripts/ci/notify.ts deploy-failure
+
+  # THE PUBLIC COPIES, once this commit deployed: scripts/ci/copybara.ts `sync`
+  # (tasks/complete/2026-10-01-core-public-copy.md). A job of its own, so a failed copy shows red
+  # here but never touches the deploy or its posts, and pages nobody; the next deploy catches up.
+  copybara:
+    name: Copy to iterate/core and iterate/packages
+    needs: deploy
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.depot/actions/setup
+        with:
+          # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      - name: Check the copy's workspace files are up to date
+        run: node scripts/ci/copybara.ts workspace-files --check
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Copy up to the deployed commit
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/copybara.ts sync --sha "$GITHUB_SHA"

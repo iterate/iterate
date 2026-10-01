@@ -53,8 +53,9 @@ import { parseAppConfig, type AppConfig } from "../../core/os/src/app-config.ts"
 import { TEST_EMAIL_DOMAIN } from "../../core/os/src/test-email-domain.ts";
 import { buildOs } from "../../core/os/scripts/build.ts";
 import { readWranglerBase } from "../../core/os/scripts/generate-wrangler-config.ts";
-import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
 import type { OsDeployableEnv } from "../../core/os/scripts/os-env.ts";
+import { configTemplates } from "./config-templates.ts";
+import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
@@ -72,7 +73,7 @@ import {
   APPS,
   appSignInLink,
   assertFreshInstall,
-  configTemplateNames,
+  configTemplateFolders,
   foldPreviewSection,
   MAIN_ON_DEV,
   previewDeploymentName,
@@ -444,7 +445,7 @@ async function deployPreviewSteps(
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
-  // what an app installs in a project (Docs' "Install Docs"), as core/os/scripts/build.ts pins the template's agents:
+  // what an app installs in a project (Docs' "Install Docs"), pinned as config-templates.ts pins the voice template's:
   // worked out before the builds, since in a shallow CI checkout it fetches history
   const packagesCommit = checkoutPublishedPackageCommit(REPO_ROOT, process.env.PREVIEW_HEAD_SHA);
   const steps = [
@@ -610,7 +611,7 @@ function signInLinks(preview: {
     templates: dash
       ? templateQuickLaunches({
           dashUrl: dash.url,
-          templates: configTemplateNames(REPO_ROOT),
+          templates: configTemplateFolders(REPO_ROOT),
           changedPaths: preview.changedPaths,
           // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
           headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
@@ -1257,7 +1258,7 @@ async function main(command: Command, options: PreviewOptions) {
   const urls = previewDeploymentUrls(name);
   console.log(`deployment ${name} → ${urls.os}`);
   if (command === "config") {
-    await buildOs(getOsEnv(name));
+    await buildOs(getOsEnv(name), configTemplates(REPO_ROOT));
     console.log(`wrote ${findBuiltWranglerConfig(ROOT)}`);
     return;
   }
@@ -1271,4 +1272,4 @@ async function main(command: Command, options: PreviewOptions) {
   return deployPreview(await accountContext(), name, pr, apps);
 }
 
-void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });
+void createCli(import.meta).run({ formatError: describe });

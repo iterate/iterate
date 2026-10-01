@@ -8,17 +8,6 @@
 // draft stays after a success — the next append is usually a tweak of the last.
 import { useMemo, useRef, useState } from "react";
 import { PlusIcon, SparklesIcon } from "lucide-react";
-import { Button } from "../button.tsx";
-import { CodeEditor } from "../code-editor.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "../dropdown-menu.tsx";
-import { Spinner } from "../spinner.tsx";
 import { RowGutter } from "./event-row.tsx";
 import { appendCompletionsAt, knownEventTypes } from "./append-completions.ts";
 import {
@@ -30,6 +19,17 @@ import {
 } from "./append-events.ts";
 import { recount, shortEventType, sortedCounts, type TypeCounts } from "./filters.tsx";
 import type { ContextViewEvent, ContextViewProcessor } from "./types.tsx";
+import { CodeEditor } from "#/components/code-editor.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
+import { Button } from "#/components/ui/button.tsx";
 
 export function AppendComposer({
   onAppend,

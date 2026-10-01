@@ -1283,7 +1283,7 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
   return publisher;
 }
 
-/** The Durable Object classes the default template's modules export (configs/default). */
+/** The Durable Object classes the default template's modules export (core/configs/default). */
 function defaultClasses() {
   return { "agents.ts": ["AgentCollectionDurableObject", "AgentDurableObject"], "worker.ts": [] };
 }

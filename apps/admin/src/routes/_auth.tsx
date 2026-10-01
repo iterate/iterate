@@ -20,7 +20,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@iterate-com/ui/components/sidebar";
+} from "@iterate-com/ui/components/ui/sidebar";
 import { adminScopes } from "../scopes.ts";
 
 const iterate = createIterateClient({ scopes: adminScopes });

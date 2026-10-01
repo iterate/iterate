@@ -15,14 +15,14 @@ import { Command as CommandPrimitive } from "cmdk";
 import { CheckIcon, SearchIcon } from "lucide-react";
 import {
   filterPaletteEntries,
-  plainLeftClick,
   withoutProjectLinks,
   type AppPaletteEntry,
   type PaletteEntry,
   type SidebarNavItem,
 } from "./app-shell-palette-entries.ts";
 import type { AppShellProject } from "./app-shell.tsx";
-import { Button } from "./button.tsx";
+import { plainLeftClick } from "#/lib/plain-left-click.ts";
+import { Button } from "#/components/ui/button.tsx";
 import {
   Command,
   CommandEmpty,
@@ -30,9 +30,15 @@ import {
   CommandItem,
   CommandList,
   CommandShortcut,
-} from "./command.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./dialog.tsx";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./sidebar.tsx";
+} from "#/components/ui/command.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "#/components/ui/dialog.tsx";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "#/components/ui/sidebar.tsx";
 
 type PaletteRow =
   | (PaletteEntry & { kind: "project"; href: string })

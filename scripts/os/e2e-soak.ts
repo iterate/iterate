@@ -292,4 +292,4 @@ function firstLine(message: string): string {
     : line;
 }
 
-void createCli({ ...import.meta, name: "e2e-soak" }).run();
+void createCli(import.meta).run();

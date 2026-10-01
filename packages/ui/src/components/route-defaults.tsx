@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
-import { Button } from "./button.tsx";
-import { capturePosthogException } from "./posthog.tsx";
-import { Spinner } from "./spinner.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { capturePosthogException } from "#/components/posthog.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 export function DefaultPendingComponent() {
   return (

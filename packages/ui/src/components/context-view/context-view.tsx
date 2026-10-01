@@ -24,7 +24,6 @@
 // the feed follows its tail so it lands in view. No `onAppend`, no composer.
 import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cn } from "cn";
-import { Spinner } from "../spinner.tsx";
 import { ContextPathLinksContext, type ContextPathLinks } from "./context-path.tsx";
 import {
   contextViewFilterOf,
@@ -59,6 +58,7 @@ import {
   type EventRenderers,
   rendererFor,
 } from "./types.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 const MODES: { id: ContextViewMode; label: string }[] = [
   { id: "pretty", label: "Pretty" },

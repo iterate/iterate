@@ -219,6 +219,7 @@ async function createFixture(
   );
   const commit = encodeCommit({
     author: { date: new Date(0), email: "test@iterate.com", name: "Test" },
+    committer: { email: "test@iterate.com", name: "Test" },
     message: "fixture",
     parents: [],
     tree: rootOid,

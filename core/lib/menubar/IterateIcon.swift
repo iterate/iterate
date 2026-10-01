@@ -1,5 +1,5 @@
 // The 𝑖 menu-bar mark, drawn from the brand logo's own vector paths
-// (packages/ui/src/assets/iterate-logo.svg) so there's no asset catalog and
+// (packages/ui/src/components/iterate-logo.svg) so there's no asset catalog and
 // no rasterization step. The glyph is pure polygons (M/L/H/V/Z, absolute), so
 // a tiny path reader turns it straight into an NSBezierPath. Rendered as a
 // template image: white on the dark menu bar, adapting on light.

@@ -1,0 +1,43 @@
+# THE PUBLIC COPY, BEFORE IT MERGES: scripts/ci/copybara.ts `check`
+# (tasks/complete/2026-10-01-core-public-copy.md). The copy itself is Deploy OS's `copybara` job.
+#
+# Its own workflow, off the required checks: Copybara fetches this commit from GitHub, and the path
+# filter runs it only when the copy's files change.
+name: Copy core/ (check)
+permissions:
+  contents: read
+on:
+  pull_request:
+    paths:
+      - .depot/workflows/copybara.yml
+      - scripts/ci/copybara.ts
+      - copybara/**
+      - core/**
+      - LICENSE
+      - tsconfig.base.json
+      - tsconfig.app.json
+      - .nvmrc
+      - patches/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch: {}
+concurrency:
+  group: copybara-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  copybara:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.depot/actions/setup
+      - name: Check the copy's workspace files are up to date
+        run: node scripts/ci/copybara.ts workspace-files --check
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      # the pull request's head, which GitHub has; a merge commit CI made, it would not
+      - name: Copy into a folder and run the self-host recipe
+        run: node scripts/ci/copybara.ts check --sha "${{ github.event.pull_request.head.sha || github.sha }}"

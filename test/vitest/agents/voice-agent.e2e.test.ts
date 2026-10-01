@@ -5,12 +5,13 @@
 // inherited KV/egress, secrets, the hand-over, agent scripts and audio both ways; not the live
 // model, microphones or speakers.
 import { expect } from "vitest";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system-prompt.ts";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../core/lib/src/agents/system-prompt.ts";
 import { openItx, readAll, runId, until, untilValue } from "../../helpers/client.ts";
 import { FakeAi, sseResponse } from "../../helpers/fake-ai.ts";
 import { oauthSession } from "../../helpers/principal.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
+  preset,
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
@@ -249,7 +250,7 @@ const answer = (text: string) =>
 async function voiceCall(model: (call: { websiteUrl: string }) => FakeAi | undefined) {
   const slug = freshDnsSafeProjectSlug("voice");
   const user = { email: `voice-${runId()}@example.com` };
-  const projectId = await registerProject(slug, user);
+  const projectId = await registerProject(slug, user, await preset("Default"));
   const root = openItx(projectId);
   // The provider fixture is ANOTHER project's config worker: this project's own config worker is
   // the website the agent rewrites, and every host of a project reaches it.

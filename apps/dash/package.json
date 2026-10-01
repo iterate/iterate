@@ -12,7 +12,6 @@
     "routes:check": "node scripts/app.ts generate-route-tree --check"
   },
   "dependencies": {
-    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@tanstack/react-router": "catalog:",
@@ -22,7 +21,7 @@
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "streamdown": "^2.6.0",
+    "streamdown": "catalog:",
     "tailwindcss": "catalog:",
     "zod": "catalog:"
   },

@@ -1,6 +1,6 @@
 import { Outlet, Scripts, useHydrated } from "@tanstack/react-router";
-import { EnvironmentHeadContent } from "../components/environment-head-content.tsx";
 import { AppProviders } from "./providers.tsx";
+import { EnvironmentHeadContent } from "#/components/environment-head-content.tsx";
 
 /** Every app's root route component: the document, with the app's providers around its pages.
  *  `icon` is the app's icon file in production. `basePath` is the path the page is served under

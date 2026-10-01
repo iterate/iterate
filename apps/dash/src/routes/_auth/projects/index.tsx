@@ -11,10 +11,15 @@ import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
 import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import {
   Sheet,
   SheetClose,
@@ -23,8 +28,8 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -32,7 +37,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@iterate-com/ui/components/table";
+} from "@iterate-com/ui/components/ui/table";
 import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
@@ -198,6 +203,13 @@ function NewProjectForm({
   const [picked, setPicked] = useState<string | null>(null);
   const orgId = picked || orgs[0]?.id || "";
   const [orgName, setOrgName] = useState("");
+  // the preset whose folder is `default`, which the select's first option stands for (the consent
+  // page starts a project from it too, core/os consent-page.server.ts); "Blank", the platform's
+  // minimal config, when the platform offers none
+  const defaultPreset = templateOptions.find(
+    (option) =>
+      parseConfigRepoTemplateReference(option.reference).path?.split("/").at(-1) === "default",
+  );
   const initial = templateFields(initialTemplate, templateOptions);
   const [template, setTemplate] = useState(initial.template);
   const [customTemplate, setCustomTemplate] = useState(initial.customTemplate);
@@ -221,7 +233,9 @@ function NewProjectForm({
       using created = await api.projects.create({
         project: name.trim(),
         orgId: chosenOrgId || undefined,
-        configRepoTemplate: (template === "custom" ? customTemplate.trim() : template) || undefined,
+        configRepoTemplate:
+          (template === "custom" ? customTemplate.trim() : template || defaultPreset?.reference) ||
+          undefined,
       });
       // the slug as the platform slugged it, off the root context handed back
       const { projectId, projectSlug } = await created.whoami();
@@ -268,12 +282,14 @@ function NewProjectForm({
             value={template}
             onChange={(event) => setTemplate(event.target.value)}
           >
-            <NativeSelectOption value="">Default</NativeSelectOption>
-            {templateOptions.map((option) => (
-              <NativeSelectOption key={option.reference} value={option.reference}>
-                {option.label}
-              </NativeSelectOption>
-            ))}
+            <NativeSelectOption value="">{defaultPreset?.label || "Blank"}</NativeSelectOption>
+            {templateOptions
+              .filter((option) => option !== defaultPreset)
+              .map((option) => (
+                <NativeSelectOption key={option.reference} value={option.reference}>
+                  {option.label}
+                </NativeSelectOption>
+              ))}
             <NativeSelectOption value="custom">Custom GitHub template…</NativeSelectOption>
           </NativeSelect>
           <FieldDescription>
@@ -357,15 +373,17 @@ function NewProjectForm({
 }
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
- *  a name is the built-in whose path is `configs/<name>` — `default`, and a name that is none,
- *  is the default template (the default files). */
+ *  a name is the preset whose path is `configs/<name>`. No name, `default`, and a name that is none
+ *  are the select's first option (the default preset, else "Blank"). */
 function templateFields(
   template: string | undefined,
   options: { reference: string }[],
 ): { template: string; customTemplate: string } {
   if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
   const builtIn = options.find(
-    (option) => parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
+    (option) =>
+      template !== "default" &&
+      parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
   );
   return { template: builtIn?.reference || "", customTemplate: "" };
 }

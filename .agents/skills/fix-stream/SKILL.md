@@ -75,7 +75,7 @@ stored: the settled `agent/llm-request-settled` carries the text.
 ## 3. Name the complaint
 
 Print the conversation with offsets and times before reading product code. Every type is
-`events.iterate.com/…` (the contract is `packages/agents/src/contract.ts`):
+`events.iterate.com/…` (the contract is `core/lib/src/agents/contract.ts`):
 
 - `agent/context-added`: the conversation. The `role` is `system`, `developer`, `user` or
   `assistant`. A user item's `actor.type` is `user`, `script` (a script's result) or `agent`.
@@ -105,7 +105,7 @@ deployment and no real model.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets                |
 | the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                            |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                                  |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `core/lib/src/agents/processor.test.ts`: `reduceProcessor` rows                                                  |
 | a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent              |
 | an effect: a model call, a script run, the birth or death sagas       | `test/vitest/agents/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
 
@@ -123,7 +123,7 @@ deployment and no real model.
 
 ## 5. Prove it is red for the right reason
 
-`pnpm --dir <package> exec vitest run <file>` (`apps/agents`, `packages/agents`, `packages/voice` or `packages/ui`). A failure only proves
+`pnpm --dir <package> exec vitest run <file>` (`apps/agents`, `core/lib`, `packages/voice` or `packages/ui`). A failure only proves
 something when its diff shows the prod symptom. To see everything, assert against a string,
 for example `expect(items.map((i) => i.kind)).toEqual("SHOW ME")`, read the diff, then delete
 that assertion. Commit the test and fixture, push, and open or update the PR as a draft so CI

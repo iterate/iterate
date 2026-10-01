@@ -12,7 +12,8 @@ import path from "node:path";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
 import { build } from "../../core/os/scripts/build.ts";
-import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
+import { configTemplates } from "../../scripts/os/config-templates.ts";
+import { checkoutPublishedPackageCommit } from "../../scripts/os/published-package-commit.ts";
 import { deployedTarget } from "./deployed-target.ts";
 import {
   E2E_ADMIN_BEARER,
@@ -46,16 +47,16 @@ declare module "vitest" {
     /** The run's id, folded into every identifier a test mints (client.ts `freshCtx`): E2E_RUN_ID
      *  when the run pins one (CI: the workflow run and attempt), else minted here once per run. */
     runId: string;
-    /** This checkout's pkg.pr.new commit (scripts/published-package-commit.ts), worked out once. */
+    /** This checkout's pkg.pr.new commit (scripts/os/published-package-commit.ts), worked out once. */
     publishedPackageCommit: string;
   }
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  // core/os's generated modules (its scripts/build.ts), which the core/os source the suites import
-  // reads. `pnpm e2e` builds the whole worker before vitest starts; `e2e:run` against a deployment
-  // builds nothing else.
-  await build();
+  // core/os's generated modules (its scripts/build.ts), with iterate's templates, which the core/os
+  // source the suites import reads. `pnpm e2e` builds the whole worker before vitest starts;
+  // `e2e:run` against a deployment builds nothing else.
+  await build({ templates: configTemplates(path.resolve(PACKAGE_DIR, "../..")) });
   project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
   project.provide(
     "publishedPackageCommit",

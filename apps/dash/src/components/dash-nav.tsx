@@ -1,5 +1,5 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
-// overview, contexts (any context's log, live), MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
+// overview, contexts (any context's log, live), repos (the repo IDE), MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
 // organizations, each with its projects (components/organization-tree.tsx) — and the other
 // first-party apps.
 import { getRouteApi, Link, useMatchRoute } from "@tanstack/react-router";
@@ -8,6 +8,7 @@ import {
   Blocks,
   Building2,
   ExternalLink,
+  FolderGit2,
   FolderKanban,
   Globe,
   KeyRound,
@@ -27,7 +28,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-} from "@iterate-com/ui/components/sidebar";
+} from "@iterate-com/ui/components/ui/sidebar";
 import { useOrganizationTree } from "./organization-tree.tsx";
 
 /** The root loader's: the directory of apps this deployment has (apps.ts `appDirectory`). */
@@ -36,6 +37,7 @@ const root = getRouteApi("__root__");
 const PROJECT_PAGES = [
   { to: "/projects/$slug", label: "Overview", icon: LayoutDashboard },
   { to: "/projects/$slug/contexts/$", label: "Contexts", icon: Waypoints },
+  { to: "/projects/$slug/repos", label: "Repos", icon: FolderGit2 },
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
   { to: "/projects/$slug/integrations", label: "Integrations", icon: Blocks },
@@ -70,13 +72,14 @@ export function ProjectNav({
             <SidebarMenuItem key={to}>
               <SidebarMenuButton
                 tooltip={label}
-                // Contexts is a splat (`/contexts/<any context path>`): active on every path under
-                // it; the others only on their own page, so Overview is not lit everywhere
+                // Contexts and Repos are splats (`/contexts/<any context path>`, `/repos/<name>`):
+                // active on every path under them; the others only on their own page, so Overview
+                // is not lit everywhere
                 isActive={Boolean(
                   matchRoute({
                     to,
                     params: { slug: project.slug },
-                    fuzzy: to === "/projects/$slug/contexts/$",
+                    fuzzy: to === "/projects/$slug/contexts/$" || to === "/projects/$slug/repos",
                   }),
                 )}
                 render={<Link to={to} params={{ slug: project.slug }} />}

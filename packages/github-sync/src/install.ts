@@ -1,5 +1,5 @@
 // github-sync/install.ts — how a project installs the sync: from a folder of its config repo that
-// pins this package (`githubSyncFolder`), as the agents app installs (@iterate-com/agents/install).
+// pins this package (`githubSyncFolder`), as voice installs (@iterate-com/voice/install).
 // `installGithubSync` mounts it on the two logs whose events trigger it, which only a session may do
 // (README.md). Nothing here is the runtime.
 import type { IterateContextApi } from "iterate/api";

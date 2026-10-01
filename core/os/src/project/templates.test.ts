@@ -1,8 +1,5 @@
-import { existsSync, globSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test, vi } from "vitest";
-import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
+import { PRESET } from "../../vitest.global-setup.ts";
 import { templates } from "../generated/config-templates.js";
 import { ProjectProcessor } from "./processor.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
@@ -10,59 +7,27 @@ import { ProjectContract, type ProjectState } from "./contract.ts";
 const reference = `github:example/config#${"a".repeat(40)}&path:starter`;
 const worker = "export default {fetch() {return new Response('My project')}}";
 const manifest = '{"main":"worker.ts"}';
-/** This checkout's build of the agents and voice (scripts/published-package-commit.ts), never
- *  `@main`. */
-const commit = checkoutPublishedPackageCommit(
-  path.resolve(import.meta.dirname, "../../../.."),
-  process.env.PREVIEW_HEAD_SHA,
-);
-const ourBuilds = {
-  "@iterate-com/agents": pkgPrNewVersion("@iterate-com/agents", commit),
-  "@iterate-com/voice": pkgPrNewVersion("@iterate-com/voice", commit),
-};
 
-test("omitting a template seeds the default project: the homepage, and the agents and voice apps pinned to one commit's build", async () => {
+test("omitting a template seeds core/configs/minimal: a homepage, and no packages", async () => {
   const fixture = project();
   await deliver(fixture, requested());
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
-  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
-    main: "worker.ts",
-    dependencies: ourBuilds,
-  });
+  const manifest = JSON.parse(fixture.files()!["package.json"]!);
+  expect(manifest).toMatchObject({ private: true, type: "module", main: "worker.ts" });
+  expect(manifest).not.toHaveProperty("dependencies");
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
   // an unborn `main` is its own check (`parent: null`): no read of the tip comes first
   expect(fixture.repo.tip).not.toHaveBeenCalled();
 });
 
-test("a preset is seeded from the build, its agents and voice pinned as the default's are: nothing is downloaded", async () => {
+test("a preset the build was given is seeded from the build: nothing is downloaded", async () => {
+  expect(templates).toContainEqual({ label: "Starter", reference: PRESET.reference });
   const fixture = project();
-  await deliver(
-    fixture,
-    requested(templates.find(({ label }) => label === "Heartbeat")!.reference),
-  );
+  await deliver(fixture, requested(PRESET.reference));
   expect(fixture.downloadTemplate).not.toHaveBeenCalled();
-  expect(fixture.files()?.["worker.ts"]).toContain('key: "heartbeat"');
-  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
-    dependencies: ourBuilds,
-  });
-});
-
-test("every package.json under configs/ names its folder's main module", () => {
-  const configs = path.resolve(import.meta.dirname, "../../../../configs");
-  const manifests = globSync("*/**/package.json", {
-    cwd: configs,
-    exclude: (file) => file.includes("node_modules"),
-  });
-  expect(manifests).toEqual(
-    expect.arrayContaining(["default/package.json", "minimal/package.json"]),
+  expect(fixture.files()).toEqual(
+    Object.fromEntries(PRESET.files.map((file) => [file.path, file.content])),
   );
-  for (const manifest of manifests) {
-    const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
-      main?: string;
-    };
-    expect(main, manifest).toBeTruthy();
-    expect(existsSync(path.join(configs, path.dirname(manifest), main!)), manifest).toBe(true);
-  }
 });
 
 test("copies the pinned subdirectory into a fresh root commit before project/created", async () => {
@@ -99,7 +64,7 @@ test("copies the pinned subdirectory into a fresh root commit before project/cre
 
 test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, one HEAD per version; devDependencies and other manifests keep their bytes", async () => {
   const commit = "d".repeat(40);
-  const agentsMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main";
+  const voiceMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@main";
   const head = vi.fn(
     async () => new Response(null, { headers: { "x-commit-key": `iterate:iterate:${commit}` } }),
   );
@@ -107,12 +72,12 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
   const manifestOf = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
   const root = manifestOf({
     main: "worker.ts",
-    dependencies: { "@iterate-com/agents": agentsMain, hono: "^4" },
+    dependencies: { "@iterate-com/voice": voiceMain, hono: "^4" },
     devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
   });
   const agents = manifestOf({
     main: "index.ts",
-    dependencies: { "@iterate-com/agents": agentsMain },
+    dependencies: { "@iterate-com/voice": voiceMain },
   });
   const fixture = project(undefined, async () => [
     { path: "package.json", content: root },
@@ -122,21 +87,21 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
     { path: "fixtures/package.json", content: '{"name":"fixture"}' },
   ]);
   await deliver(fixture, requested(reference));
-  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${commit}`;
+  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@${commit}`;
   expect(fixture.files()).toMatchObject({
-    "package.json": root.replace(agentsMain, pinned),
-    "agents/package.json": agents.replace(agentsMain, pinned),
+    "package.json": root.replace(voiceMain, pinned),
+    "agents/package.json": agents.replace(voiceMain, pinned),
     "fixtures/package.json": '{"name":"fixture"}',
   });
   expect(head).toHaveBeenCalledExactlyOnceWith(
-    agentsMain,
+    voiceMain,
     expect.objectContaining({ method: "HEAD" }),
   );
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
 test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creation, and nothing is seeded", async () => {
-  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@no-such-branch";
+  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@no-such-branch";
   // pkg.pr.new's 404 echoes the ref it was asked for
   vi.stubGlobal(
     "fetch",
@@ -151,7 +116,7 @@ test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creati
       path: "package.json",
       content: JSON.stringify({
         main: "worker.ts",
-        dependencies: { "@iterate-com/agents": missing },
+        dependencies: { "@iterate-com/voice": missing },
       }),
     },
     { path: "worker.ts", content: worker },

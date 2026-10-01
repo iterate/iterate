@@ -12,10 +12,10 @@ import {
   PauseIcon,
   PlayIcon,
 } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { CodeBlock, SerializedObjectCodeBlock } from "@iterate-com/ui/components/code-block";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/ui/tabs";
 import { cn } from "cn";
 import {
   deriveAgentUiLiveStatus,

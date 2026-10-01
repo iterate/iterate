@@ -174,7 +174,7 @@ function workersWranglerConfigPath() {
   const fromApp = (path: string) => fileURLToPath(new URL(path, APP_OS).href);
   if (!existsSync(fromApp("./dist/server/index.js")))
     throw new Error(
-      "The Workers suite runs core/os's built worker: `pnpm --filter os build` first (root `pnpm test` does)",
+      "The Workers suite runs core/os's built worker: `pnpm os:build` first (root `pnpm test` does)",
     );
   const dir = mkdtempSync(join(tmpdir(), "os-workers-config-"));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));

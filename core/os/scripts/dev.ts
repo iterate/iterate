@@ -34,7 +34,7 @@ import { connect, createServer, type AddressInfo } from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { build } from "./build.ts";
+import { build, templatesFromArgs } from "./build.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const stateDir = path.join(root, ".wrangler");
@@ -103,7 +103,10 @@ await (command && command in commands ? commands[command]!(rest) : serve(process
  *  record once it answers. A detached one is handed the lock by `startDetached`, which hears
  *  "ready" over IPC. */
 async function serve(argv: string[]) {
-  const args = argv.filter((argument) => argument !== "--");
+  // `--template`s are the build's (build.ts); the rest are vite's
+  const { templates, rest: args } = await templatesFromArgs(
+    argv.filter((argument) => argument !== "--"),
+  );
   if (process.send) {
     // detached: ask `startDetached` for the lock (asking, so its answer cannot beat our listener).
     // A launcher that dies first (`pnpm dev kill` signals the lock's pid — until the handover, the
@@ -127,7 +130,7 @@ async function serve(argv: string[]) {
   const portIndex = args.indexOf("--port");
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : await defaultPort();
   const viteArgs = portIndex >= 0 ? args : [...args, "--port", `${port}`];
-  await build();
+  await build({ templates });
   // plain files have no compare-and-swap: a lock taken in the instant another process restored one
   // it moved aside (`holder`) is gone by now, and its taker stops here, before any workerd
   if (lockPid() !== process.pid)

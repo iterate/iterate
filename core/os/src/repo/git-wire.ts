@@ -99,6 +99,7 @@ export function parseCommit(payload: Uint8Array): {
   tree: string;
   parents: string[];
   author: { name: string; email: string };
+  committer: { name: string; email: string };
   timestamp: number;
   message: string;
 } {
@@ -109,6 +110,7 @@ export function parseCommit(payload: Uint8Array): {
   let tree = "";
   const parents: string[] = [];
   let author = { name: "", email: "" };
+  let committer = { name: "", email: "" };
   let timestamp = 0;
   for (const line of header.split("\n")) {
     if (line.startsWith("tree ")) tree = line.slice(5);
@@ -119,10 +121,13 @@ export function parseCommit(payload: Uint8Array): {
         author = { name: stamp[1]!, email: stamp[2]! };
         timestamp = Number(stamp[3]) * 1000;
       }
+    } else if (line.startsWith("committer ")) {
+      const stamp = /^committer (.*) <([^>]*)> \d+ [+-]\d{4}$/.exec(line);
+      if (stamp) committer = { name: stamp[1]!, email: stamp[2]! };
     }
   }
   if (!tree) throw new Error("a commit without a tree header");
-  return { tree, parents, author, timestamp, message };
+  return { tree, parents, author, committer, timestamp, message };
 }
 
 /**
@@ -277,16 +282,18 @@ function encodeTree(entries: TreeEntry[]): Uint8Array {
 
 export function encodeCommit(input: {
   author: { date: Date; email: string; name: string };
+  /** who made the commit, at the author's date: git's "committed by" beside "authored by" */
+  committer: { email: string; name: string };
   message: string;
   parents: string[];
   tree: string;
 }): Uint8Array {
-  const stamp = `${input.author.name} <${input.author.email}> ${Math.floor(input.author.date.getTime() / 1000)} +0000`;
+  const at = `${Math.floor(input.author.date.getTime() / 1000)} +0000`;
   const lines = [
     `tree ${input.tree}`,
     ...input.parents.map((parent) => `parent ${parent}`),
-    `author ${stamp}`,
-    `committer ${stamp}`,
+    `author ${input.author.name} <${input.author.email}> ${at}`,
+    `committer ${input.committer.name} <${input.committer.email}> ${at}`,
     "",
     input.message,
   ];

@@ -394,12 +394,17 @@ export async function freshPublishedCtx(prefix: string): Promise<{ ctx: string; 
   return { ctx, itx };
 }
 
-/** `root` created as `projects.create` creates a project with no template: the default, seeded. */
-export async function createdProject(root: any, slug: string): Promise<any> {
+/** `root` created as `projects.create` creates a project: seeded from `configRepoTemplate` (a
+ *  reference `projects.templates()` lists, or a GitHub one), else core's minimal config. */
+export async function createdProject(
+  root: any,
+  slug: string,
+  configRepoTemplate: string | undefined,
+): Promise<any> {
   await root.processors.enable("project");
   await root.append({
     type: "events.iterate.com/project/create-requested",
-    payload: { slug, orgId: "test" },
+    payload: { slug, orgId: "test", configRepoTemplate },
   });
   const settled = await root.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],

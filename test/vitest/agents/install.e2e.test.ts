@@ -1,4 +1,4 @@
-import { installAgents } from "@iterate-com/agents/install";
+import { installAgents } from "iterate/agents/install";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, publishConfig, readAll, until } from "../../helpers/client.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
@@ -76,7 +76,7 @@ test(
     // the agents' own code changes: its next call boots the new code, the conversation kept
     await publishConfig(itx, {
       ...agentsWorkspaceConfig,
-      "index.ts": `${agentsWorkspaceConfig["index.ts"]}\n// the next version\n`,
+      "agents.ts": `${agentsWorkspaceConfig["agents.ts"]}\n// the next version\n`,
     });
     await itx.agents.get("/agents/support").message("Three.");
     await replies(3);

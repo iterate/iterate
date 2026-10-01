@@ -1,15 +1,22 @@
 // Prepare source consumed by the Worker build: the platform packages loaded workers import and the
-// config templates. Vite builds the Worker and Start client after this step; Vitest runs that
-// built Worker.
+// config templates it offers: core's own (core/configs), and any others this step is given
+// (`--template`, or `build({ templates })` from iterate's deploy tooling). Vite builds the Worker
+// and Start client after this step; Vitest runs that built Worker.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
-import { pkgPrNewVersion } from "iterate/pkg-pr-new";
+import {
+  formatConfigRepoTemplateReference,
+  parseConfigRepoTemplateReference,
+} from "iterate/config-repo-template";
+import {
+  downloadPublicGithubTemplate,
+  pinPublicGithubTemplate,
+} from "../src/repo/github-template.ts";
 import { viteBuild } from "./vite-build.ts";
 import type { OsDeployableEnv } from "./os-env.ts";
-import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -27,6 +34,11 @@ const PLATFORM_ENTRIES = [
   "iterate/lib",
   "iterate/expression",
   "iterate/principal",
+  "iterate/agents",
+  "iterate/agents/install",
+  "iterate/agents/contract",
+  "iterate/agents/processor",
+  "iterate/agents/codemode-format",
   "zod",
 ] as const;
 
@@ -97,69 +109,122 @@ async function platformModules() {
   return { modules, imports };
 }
 
-/** Everything above, written. */
-export async function build() {
+/** A project template this deployment offers: the GitHub reference a creation names it by, and the
+ *  files a creation naming it is seeded with, so seeding it asks GitHub nothing. */
+export type ConfigTemplate = { reference: string; files: Array<{ path: string; content: string }> };
+
+/** Everything above, written. The presets a creation may name are core's own configs, then
+ *  `templates`; a creation that names none gets core/configs/minimal. */
+export async function build(options: { templates: ConfigTemplate[] }) {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
-  const templatesRoot = path.resolve(root, "../../configs");
-  const sourceRef = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim();
-  // this checkout's build of the packages (published-package-commit.ts), worked out only when a
-  // template still names `@main`: a copy made by Copybara names the copied commit's build already
-  let packagesCommit: string | undefined;
-  // A template as this checkout has it: its tracked files alone (not the node_modules/ an `npm
-  // install` for a local `tsc` leaves there), its agents and voice at this checkout's build of each
-  // package, never `@main`, which moves.
-  const filesOf = (name: string) =>
-    execFileSync("git", ["ls-files", "-z"], {
-      cwd: path.join(templatesRoot, name),
-      encoding: "utf8",
-    })
-      .split("\0")
-      .filter(Boolean)
-      .map((file) => {
-        const content = readFileSync(path.join(templatesRoot, name, file), "utf8");
-        const manifest = file === "package.json" ? JSON.parse(content) : undefined;
-        // every package of ours the template takes from pkg.pr.new's moving `@main`; `iterate` itself
-        // is not one: the loader links it to this deployment's own build (PLATFORM_ENTRIES)
-        const ours = Object.entries<string>(manifest?.dependencies || {}).flatMap(
-          ([dependency, version]) =>
-            dependency.startsWith("@iterate-com/") &&
-            /^https:\/\/pkg\.pr\.new\/.*@main$/.test(version)
-              ? [dependency]
-              : [],
-        );
-        if (!ours.length) return { path: file, content };
-        packagesCommit ||= checkoutPublishedPackageCommit(
-          path.resolve(root, "../.."),
-          process.env.PREVIEW_HEAD_SHA,
-        );
-        for (const dependency of ours)
-          manifest.dependencies[dependency] = pkgPrNewVersion(dependency, packagesCommit);
-        return { path: file, content: `${JSON.stringify(manifest, null, 2)}\n` };
-      });
-  // `default` is not a named template: a creation that names none gets its files (`defaultFiles`).
-  // A creation naming a preset's reference gets the preset's files from here (`templateFiles`).
-  const named = readdirSync(templatesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name !== "default")
-    .map((entry) => entry.name);
-  const templates = named.map((name) => ({
-    label: name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " "),
-    reference: `github:iterate/iterate#${sourceRef}&path:configs/${name}`,
-  }));
+  const presets = [...coreConfigTemplates(), ...options.templates];
+  const templates = presets.map(({ reference }) => ({ label: labelOf(reference), reference }));
   const templateFiles = Object.fromEntries(
-    named.map((name, index) => [templates[index]!.reference, filesOf(name)]),
+    presets.map(({ reference, files }) => [reference, files]),
   );
+  const minimalConfigFiles = trackedFiles(path.join(coreConfigs, "minimal"));
   writeFileSync(
     path.join(root, "src/generated/config-templates.js"),
-    `export const templates = ${JSON.stringify(templates)};\nexport const defaultFiles = ${JSON.stringify(filesOf("default"))};\nexport const templateFiles = ${JSON.stringify(templateFiles)};\n`,
+    [
+      `export const templates = ${JSON.stringify(templates)};`,
+      `export const templateFiles = ${JSON.stringify(templateFiles)};`,
+      `export const minimalConfigFiles = ${JSON.stringify(minimalConfigFiles)};`,
+      "",
+    ].join("\n"),
   );
 
   writeFileSync(
     path.join(root, "src/generated/platform-modules.js"),
     `export default ${JSON.stringify(await platformModules())};\n`,
   );
+}
+
+const coreConfigs = path.resolve(root, "../configs");
+
+/**
+ * Core's own configs (core/configs/<name>), each under its GitHub reference at this checkout's
+ * commit, in the repository the checkout's `origin` names: iterate/iterate in iterate's own
+ * checkouts, iterate/core in a self-host's clone of the copy, which keeps the same paths. Either
+ * way the reference resolves on GitHub, so another deployment can create from it too.
+ */
+function coreConfigTemplates(): ConfigTemplate[] {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  const origin = git("remote", "get-url", "origin");
+  const repository = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(origin);
+  if (!repository)
+    throw new Error(
+      `core's configs are offered under a GitHub reference, so this checkout's origin must be a github.com repository, not ${origin}`,
+    );
+  const [, owner, repo] = repository;
+  const commit = git("rev-parse", "HEAD");
+  return readdirSync(coreConfigs, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      reference: formatConfigRepoTemplateReference({
+        owner: owner!,
+        repo: repo!,
+        ref: commit,
+        path: `core/configs/${entry.name}`,
+      }),
+      files: trackedFiles(path.join(coreConfigs, entry.name)),
+    }));
+}
+
+/** A folder's files as git tracks them: not the node_modules/ an `npm install` for a local `tsc`
+ *  leaves there. */
+function trackedFiles(folder: string) {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: folder, encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean)
+    .map((file) => ({ path: file, content: readFileSync(path.join(folder, file), "utf8") }));
+}
+
+/** A template's name in the dash: its folder (`core/configs/heartbeat` ⇒ `Heartbeat`), else its repo. */
+function labelOf(reference: string) {
+  const { repo, path: folder } = parseConfigRepoTemplateReference(reference);
+  const name = folder?.split("/").at(-1) || repo;
+  return name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
+}
+
+/**
+ * The templates `--template <reference>` names, each a public GitHub folder
+ * (`github:<owner>/<repo>#<ref>&path:<folder>`), pinned to its commit and downloaded. With
+ * `--template-root <checkout>`, each is read from that local checkout of its repo instead (its
+ * tracked files under `path:`), and its ref must already be a commit: the dev server's and CI's
+ * templates are the checkout's own, pushed or not. Returns the other arguments as they were.
+ */
+export async function templatesFromArgs(args: string[]) {
+  const rest: string[] = [];
+  const references: string[] = [];
+  let checkout: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index]!;
+    if (argument === "--template") references.push(args[++index]!);
+    else if (argument === "--template-root") checkout = args[++index];
+    else rest.push(argument);
+  }
+  const templates = await Promise.all(
+    references.map(async (reference): Promise<ConfigTemplate> => {
+      const parsed = parseConfigRepoTemplateReference(reference);
+      if (!checkout) {
+        const pinned = await pinPublicGithubTemplate(parsed);
+        return {
+          reference: formatConfigRepoTemplateReference(pinned),
+          files: await downloadPublicGithubTemplate(pinned),
+        };
+      }
+      if (!/^[0-9a-f]{40}$/.test(parsed.ref || ""))
+        throw new Error(
+          `--template ${reference}: read from --template-root, its ref must be a commit`,
+        );
+      return {
+        reference: formatConfigRepoTemplateReference(parsed),
+        files: trackedFiles(path.resolve(checkout, parsed.path || ".")),
+      };
+    }),
+  );
+  return { templates, rest };
 }
 
 /** `vite build` of one deployment's Worker and its TanStack client into dist/. vite.config.ts gets
@@ -173,9 +238,15 @@ export async function viteBuildOs(deployment: OsDeployableEnv) {
 }
 
 /** `build`, then `viteBuildOs`. */
-export async function buildOs(deployment: OsDeployableEnv) {
-  await build();
+export async function buildOs(deployment: OsDeployableEnv, templates: ConfigTemplate[]) {
+  await build({ templates });
   await viteBuildOs(deployment);
 }
 
-if (import.meta.main) await build();
+// `pnpm build [--template <reference>]… [--template-root <checkout>]`: the generated modules, then
+// `vite build` for CLOUDFLARE_ENV's deployment (a self-host's is `self-host`).
+if (import.meta.main) {
+  const { templates } = await templatesFromArgs(process.argv.slice(2));
+  await build({ templates });
+  await viteBuild(root, {});
+}

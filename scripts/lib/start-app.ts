@@ -116,7 +116,7 @@ export function startAppWorkerConfig(
   app: StartApp,
   envName: string | undefined,
   /** The commit a per-commit deployment's packages are published at (core/os
-   *  scripts/published-package-commit.ts), which preview.ts works out once for all its builds;
+   *  scripts/os/published-package-commit.ts), which preview.ts works out once for all its builds;
    *  unused by any other env. */
   packagesCommit: string | undefined,
 ) {

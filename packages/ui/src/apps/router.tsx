@@ -8,7 +8,7 @@ import {
   DefaultErrorComponent,
   DefaultNotFoundComponent,
   DefaultPendingComponent,
-} from "../components/route-defaults.tsx";
+} from "#/components/route-defaults.tsx";
 
 /** Every app's router (its src/router.tsx `getRouter`): TanStack's `createRouter` with the defaults
  *  every app shares; an app's own options win. */

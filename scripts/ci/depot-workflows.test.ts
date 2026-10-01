@@ -240,7 +240,8 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "core/os/scripts/generate-wrangler-config.ts",
     "core/os/vite.config.ts",
     "core/os/wrangler.base.jsonc",
-    "configs/default/AGENTS.md", // build.ts bakes it into the Worker
+    "core/configs/default/AGENTS.md", // build.ts bakes it into the Worker
+    "configs/voice/AGENTS.md", // scripts/os/config-templates.ts gives it to the build
     "scripts/lib/deploy-app.ts",
   ]) {
     expect(triggers(paths, file), `${file} deploys`).toBe(true);
@@ -281,7 +282,9 @@ test.each(
       ? "steps.deploy.outcome != 'success' || (steps.check.outcome != 'success' && steps.check.outputs.paged != 'true')"
       : "steps.deploy.outcome != 'success'";
 
-  expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
+  // Deploy OS's one other job updates the public copies once the deploy succeeded
+  // (scripts/ci/copybara.ts); it never touches the deploy's own posts.
+  expect(Object.keys(workflow.jobs)).toEqual(app === "os" ? ["deploy", "copybara"] : ["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
   // exact: success only when the whole job succeeded; any run on main, a dispatch too; a failed
   // post never turns the deploy red
@@ -1278,9 +1281,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
 
   // core/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
   // script builds it beside another's
-  expect(readPackageJson(".").scripts?.test).toBe(
-    "pnpm --filter os build && pnpm -r --parallel test",
-  );
+  expect(readPackageJson(".").scripts?.test).toBe("pnpm os:build && pnpm -r --parallel test");
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();

@@ -6,7 +6,8 @@
 // against the e2e's fake git remote (test-support/fake-artifacts.ts), which speaks the real wire and
 // counts the packs it served; the whole repo story is test/vitest/os/repos.e2e.test.ts. PULL AND PUSH keep a
 // repo's main and a remote's main ONE history: the pack is forwarded unchanged, so commits keep their
-// oids and a picture its bytes; fast-forward only unless `force`; the remote is named, or origin.
+// oids and a picture its bytes; fast-forward only unless `force`; the remote is named, or origin. A
+// COMMIT A SCRIPT MAKES FOR SOMEONE is theirs, committed by iterate, and names its run.
 
 import { errorCode } from "iterate/lib";
 import { reduceProcessor } from "iterate/stream/test-support";
@@ -18,7 +19,10 @@ import {
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
 } from "../../../core/os/src/context/cf-artifacts.ts";
+import { appConfigOf, sessionSigningSecretOf } from "../../../core/os/src/app-config.ts";
+import { runningUnder } from "../../../core/os/src/cause.ts";
 import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
+import { mintOnBehalfOf } from "../../../core/os/src/on-behalf-of.ts";
 import { RepoDurableObject } from "../../../core/os/src/repo/durable-object.ts";
 
 const path = "/repos/config";
@@ -356,6 +360,59 @@ test("origin-set is reduced into the repo's state: set, replaced, forgotten; a p
   ).toBe("https://a.example/r.git");
 });
 
+test("a script's commit for Misha is his, committed by iterate, and names its run after the agent's Via; one naming Jonas as author says Misha asked; a commit nobody asked for is iterate's", async () => {
+  const artifacts = await FakeArtifacts.start({ [path]: { "worker.ts": "export default 1;\n" } });
+  onTestFinished(() => artifacts.close());
+  const { repo } = syncingRepo(artifacts);
+  const misha = { actor: "user_1", email: "misha@example.com" };
+  const token = await mintOnBehalfOf(
+    { principal: misha, grant: "grant_claude", run: "/@83" },
+    "prj_repo",
+    await sessionSigningSecretOf(appConfigOf(APP_CONFIG_ENV)),
+    Date.now(),
+  );
+  const cause = { chain: "2026-09-30T10:00:00.000Z with a call ~t", depth: 1, onBehalfOf: token };
+
+  await runningUnder(cause, () =>
+    repo.commitFiles({
+      message: "docs: a.md\n\nVia: Claude Code",
+      changes: [{ path: "a.md", content: "a\n" }],
+    }),
+  );
+  await runningUnder(cause, () =>
+    repo.commitFiles({
+      message: "Jonas's words",
+      author: { name: "Jonas", email: "jonas@example.com" },
+      changes: [{ path: "b.md", content: "b\n" }],
+    }),
+  );
+  await repo.commitFiles({ message: "the seed", changes: [{ path: "c.md", content: "c\n" }] });
+  // a blank message is refused, not turned into a commit of trailers alone
+  await expect(
+    runningUnder(cause, () =>
+      repo.commitFiles({ message: " \n", changes: [{ path: "d.md", content: "d\n" }] }),
+    ),
+  ).rejects.toThrow("message must be a non-empty string");
+
+  const iterate = { name: "iterate", email: "config@iterate.com" };
+  expect((await repo.log({ limit: 3 })).reverse()).toMatchObject([
+    {
+      author: { name: "misha@example.com", email: "misha@example.com" },
+      committer: iterate,
+      message: "docs: a.md\n\nVia: Claude Code\nIterate-Run: /@83",
+    },
+    {
+      author: { name: "Jonas", email: "jonas@example.com" },
+      committer: iterate,
+      message: "Jonas's words\n\nIterate-Run: /@83\nRequested-by: misha@example.com",
+    },
+    { author: iterate, committer: iterate, message: "the seed" },
+  ]);
+});
+
+/** The two vars the deployment's config needs, whose key signs a run's token (../on-behalf-of.ts). */
+const APP_CONFIG_ENV = { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__PASSWORD: "p" };
+
 /** The repo facet on `path`, created, reaching `cfArtifacts` as its context's `itx.cfArtifacts`, over
  *  `storage` — its durable storage, which a second facet over the same one finds as a fresh
  *  incarnation does. */
@@ -372,6 +429,7 @@ function repoFacet(
     storage,
   } as unknown as DurableObjectState;
   const repo = new RepoDurableObject(ctx, {
+    ...APP_CONFIG_ENV,
     ITX: { get: () => ({ cfArtifacts, ...itx }) },
   } as never);
   vi.spyOn(repo, "snapshot").mockResolvedValue({

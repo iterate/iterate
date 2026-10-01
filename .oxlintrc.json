@@ -19,33 +19,33 @@
     "**/.claude/",
     "**/.cursor/",
     "**/.husky/",
-    "packages/ui/src/components/alert-dialog.tsx",
-    "packages/ui/src/components/avatar.tsx",
-    "packages/ui/src/components/badge.tsx",
-    "packages/ui/src/components/breadcrumb.tsx",
-    "packages/ui/src/components/button.tsx",
-    "packages/ui/src/components/card.tsx",
-    "packages/ui/src/components/checkbox.tsx",
-    "packages/ui/src/components/command.tsx",
-    "packages/ui/src/components/dialog.tsx",
-    "packages/ui/src/components/dropdown-menu.tsx",
-    "packages/ui/src/components/empty.tsx",
-    "packages/ui/src/components/field.tsx",
-    "packages/ui/src/components/input-group.tsx",
-    "packages/ui/src/components/input.tsx",
-    "packages/ui/src/components/label.tsx",
-    "packages/ui/src/components/native-select.tsx",
-    "packages/ui/src/components/select.tsx",
-    "packages/ui/src/components/separator.tsx",
-    "packages/ui/src/components/sheet.tsx",
-    "packages/ui/src/components/sidebar.tsx",
-    "packages/ui/src/components/skeleton.tsx",
-    "packages/ui/src/components/sonner.tsx",
-    "packages/ui/src/components/spinner.tsx",
-    "packages/ui/src/components/table.tsx",
-    "packages/ui/src/components/tabs.tsx",
-    "packages/ui/src/components/textarea.tsx",
-    "packages/ui/src/components/tooltip.tsx",
+    "packages/ui/src/components/ui/alert-dialog.tsx",
+    "packages/ui/src/components/ui/avatar.tsx",
+    "packages/ui/src/components/ui/badge.tsx",
+    "packages/ui/src/components/ui/breadcrumb.tsx",
+    "packages/ui/src/components/ui/button.tsx",
+    "packages/ui/src/components/ui/card.tsx",
+    "packages/ui/src/components/ui/checkbox.tsx",
+    "packages/ui/src/components/ui/command.tsx",
+    "packages/ui/src/components/ui/dialog.tsx",
+    "packages/ui/src/components/ui/dropdown-menu.tsx",
+    "packages/ui/src/components/ui/empty.tsx",
+    "packages/ui/src/components/ui/field.tsx",
+    "packages/ui/src/components/ui/input-group.tsx",
+    "packages/ui/src/components/ui/input.tsx",
+    "packages/ui/src/components/ui/label.tsx",
+    "packages/ui/src/components/ui/native-select.tsx",
+    "packages/ui/src/components/ui/select.tsx",
+    "packages/ui/src/components/ui/separator.tsx",
+    "packages/ui/src/components/ui/sheet.tsx",
+    "packages/ui/src/components/ui/sidebar.tsx",
+    "packages/ui/src/components/ui/skeleton.tsx",
+    "packages/ui/src/components/ui/sonner.tsx",
+    "packages/ui/src/components/ui/spinner.tsx",
+    "packages/ui/src/components/ui/table.tsx",
+    "packages/ui/src/components/ui/tabs.tsx",
+    "packages/ui/src/components/ui/textarea.tsx",
+    "packages/ui/src/components/ui/tooltip.tsx",
     "packages/ui/src/hooks/use-mobile.ts",
     "core/os/src/components/ui/avatar.tsx",
     "core/os/src/components/ui/button.tsx",
@@ -308,8 +308,8 @@
               {
                 "target": "./core",
                 "from": "./",
-                "except": ["./configs", "./core", "./node_modules"],
-                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The one exception until it is resolved: configs/, the project templates the build bakes in (tasks/core-minimal-template.md)."
+                "except": ["./core", "./node_modules"],
+                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. Project templates are the build's input (core/os/scripts/build.ts `--template`), never a folder core reads."
               },
               {
                 "target": "./core/lib",
@@ -350,16 +350,23 @@
       }
     },
     {
-      "files": ["core/lib/src/stream/contract.ts", "packages/agents/src/contract.ts"],
+      "files": ["core/lib/src/stream/contract.ts", "core/lib/src/agents/contract.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**", "!zod", "!iterate/stream/contract", "!iterate/stream/run"],
+                "group": [
+                  "**",
+                  "!zod",
+                  "!iterate/stream/contract",
+                  "!iterate/stream/run",
+                  "!../stream/contract.ts",
+                  "!../stream/run.ts"
+                ],
                 "allowTypeImports": true,
-                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through @iterate-com/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (core/lib/src/stream/contract.ts). Type-only imports are free."
+                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through iterate/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (core/lib/src/stream/contract.ts). Type-only imports are free."
               }
             ]
           }

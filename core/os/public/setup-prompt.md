@@ -4,7 +4,7 @@ A recipe for a coding agent. If you were asked to set someone up with iterate.co
 self-hosted iterate, follow it.
 
 End state: `https://iterate.<subdomain>.workers.dev/mcp` is a working remote MCP server in the user's
-agents. iterate OS (`core/os` in https://github.com/iterate/iterate) is one Worker: sign-in and
+agents. iterate OS (`core/os` in https://github.com/iterate/core) is one Worker: sign-in and
 OAuth, `/mcp` (one tool, `run({ project, script })`, which evaluates `async (itx) => …` against a
 project), and a Durable Object per project.
 
@@ -30,10 +30,15 @@ so say which flow a page is for when you open it.
 ## 1. Build
 
 ```bash
-git clone --depth 1 https://github.com/iterate/iterate   # gitignored
+git clone --depth 1 https://github.com/iterate/core iterate   # gitignored
 cd iterate && pnpm install
-CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes core/os/dist/server/wrangler.json
+CLOUDFLARE_ENV=self-host pnpm --filter os build
+# writes core/os/dist/server/wrangler.json
 ```
+
+The deployment offers core's project templates (`core/configs/`). A new project, the user's first
+included, starts from `default`: the agents app. A bare homepage ("Blank" in the dash) is always
+offered too.
 
 ## 2. Log in
 
@@ -194,11 +199,34 @@ dash's projects page. That starts a new attempt.
   - `<origin>/mcp` (remote HTTP) for other clients, where the password lives, and that each client signs in the same way;
   - the dash: `https://dash.iterate.com/.auth/connect?issuer=<origin>`;
   - voice: `https://voice.iterate.com/.auth/connect?issuer=<origin>`, to talk to the project from
-    the laptop mic. The page installs the voice agent itself, asking for an OpenAI key the first
-    time.
+    the laptop mic; the page asks for an OpenAI key the first time.
   - kit: `https://k.iterate.com/.auth/connect?issuer=<origin>`, to flash a voice board (e.g. a Home
     Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too.
-    It installs the voice agent the same way.
+  - Both need voice in the project's config, which `default` doesn't install. Offer to add it
+    ([Adding voice](#adding-voice)).
+
+## Adding voice
+
+Voice is the npm package `@iterate-com/voice`, on the agents app the project already has. Add it to
+the project's existing config in one commit, through the `run` tool:
+`itx.repos.get("/repos/config")`, read its `tip()` and files, then `commitFiles({ message, changes,
+parent: <that tip> })` with:
+
+- `package.json`: `"@iterate-com/voice"` in `dependencies`, pinned to a commit:
+  `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>`, where `<sha>` is the commit
+  `curl -sI https://pkg.pr.new/iterate/iterate/@iterate-com/voice@main` names in its
+  `x-commit-key` header (`iterate:iterate:<sha>`); the loader refuses `@main`, which moves;
+- `voice.ts`: `export { default, VoiceAgentDurableObject } from "@iterate-com/voice";`
+- `worker.ts`: `import { installVoice } from "@iterate-com/voice/install";` and
+  `await installVoice(itx);` in the `events.iterate.com/project/worker-updated` case, after
+  `installAgents(itx)`. Keep everything else in the file as it is.
+
+Then wait for that commit's outcome on `/`: `itx.waitForEvent({ type:
+["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"],
+payload: { commitOid }, afterOffset: 0, timeoutMs: 120_000 })` (`afterOffset: 0` finds an outcome
+that landed before the wait began). Once it's published, the init case has installed voice, and the
+voice and Kit pages work. iterate's voice template
+(https://github.com/iterate/packages/tree/main/configs/voice) is the same config, whole.
 
 ## Integrations
 

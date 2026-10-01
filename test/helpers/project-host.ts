@@ -131,11 +131,30 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
  *  the worker's own /api, the catalog row on global:/, the saga opened on the project's / — on the admin
  *  session (the project lands in the deployment's own org) or as `as` (a user's session: their org,
  *  with them a member) — so its host serves, and return its minted id: the DO is addressed by the
- *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Idempotent; identical against
- *  the local and the deployed worker. */
-export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
-  using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
+ *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Seeded from `configRepoTemplate`
+ *  (`preset("Default")` for the agents app), else core's minimal config. Idempotent;
+ *  identical against the local and the deployed worker. */
+export async function registerProject(
+  slug: string,
+  as?: { email: string },
+  configRepoTemplate?: string,
+): Promise<string> {
+  using itx = await session()
+    .authenticate(adminCredentials(as))
+    .projects.create({ project: slug, configRepoTemplate });
   return (await itx.whoami()).projectId;
+}
+
+/** A preset among the templates the platform under test was built with, by its label in the dash:
+ *  Default (core/configs/default, the agents app) is what a person creates in the dash or through
+ *  an app's sign-in; Voice (configs/voice) adds the voice app. */
+export async function preset(label: "Default" | "Voice"): Promise<string> {
+  const presets: { label: string; reference: string }[] = await session()
+    .authenticate(adminCredentials())
+    .projects.templates();
+  const found = presets.find((preset) => preset.label === label);
+  if (!found) throw new Error(`the platform under test offers no ${label} preset (pnpm os:build)`);
+  return found.reference;
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry

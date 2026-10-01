@@ -59,8 +59,8 @@ export const VENDORINGS = [
       "textarea",
       "tooltip",
     ],
-    componentsDir: "src/components",
-    extraFiles: ["src/components/input-group.tsx", "src/hooks/use-mobile.ts"],
+    componentsDir: "src/components/ui",
+    extraFiles: ["src/components/ui/input-group.tsx", "src/hooks/use-mobile.ts"],
     stylesheet: "src/styles/globals.css",
   },
   {
@@ -213,4 +213,4 @@ export function refresh() {
   }
 }
 
-void createCli({ ...import.meta, name: "shadcn-drift" }).run();
+void createCli(import.meta).run();

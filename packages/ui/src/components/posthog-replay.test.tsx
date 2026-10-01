@@ -11,10 +11,10 @@ import type { CaptureResult } from "posthog-js";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
-import { Input } from "./input.tsx";
 import { NotRecorded } from "./not-recorded.tsx";
 import { posthogInitOptions } from "./posthog.tsx";
-import { Textarea } from "./textarea.tsx";
+import { Input } from "#/components/ui/input.tsx";
+import { Textarea } from "#/components/ui/textarea.tsx";
 
 test("a replay masks what is typed and leaves out a NotRecorded block, and no event carries an invitation token", async () => {
   const token = "phc_FAKE_replay_privacy_test";

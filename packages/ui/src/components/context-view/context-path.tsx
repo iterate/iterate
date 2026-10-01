@@ -4,7 +4,7 @@
 // AppShell's `projectHref` and `onNavigate` work.
 import { createContext, useContext, type ReactNode, type SyntheticEvent } from "react";
 import { cn } from "cn";
-import { plainLeftClick } from "../app-shell-palette-entries.ts";
+import { plainLeftClick } from "#/lib/plain-left-click.ts";
 
 /** Where a context path links to, the app's: `hrefOf("/repos")` is its URL; `onNavigate`, when the
  *  app has a client router, takes a plain click or an Enter (it prevents the default and navigates).

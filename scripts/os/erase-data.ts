@@ -363,4 +363,4 @@ async function dropD1Schema(d1: D1Query) {
 
 export { eraseDataWith, d1Query, dropD1Schema };
 
-void createCli({ ...import.meta, name: "erase-data" }).run();
+void createCli(import.meta).run();
