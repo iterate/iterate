@@ -8,6 +8,7 @@
 // script settled → developer result → request → settled + assistant prose → idle. The model is `itx.ai`
 // under the agent's rules, so a test LENDS a scripted fake there (Misha's shadow, ai-root-shadow); the
 // deployed suite runs ONE real turn through Workers AI.
+import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import {
@@ -340,10 +341,12 @@ test("words sent while a script runs are answered at once: the feed shows the re
   const itx = await openAgentItx(freshCtx("agent-reply-mid-script"));
   const support = itx.cd("/agents/support");
   const ai = new FakeAi([
-    '<codemode status="Waiting for go">\nwhile ((await itx.kv.get("go")) !== "yes") await new Promise((resolve) => setTimeout(resolve, 200));\n</codemode>',
+    '<codemode status="Waiting for go">\nawait itx.go.wait();\n</codemode>',
     "Still waiting for go.",
   ]);
   await support.provide("itx.ai", ai);
+  const go = new Gate();
+  await support.provide("itx.go", go);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
   await operatorPrompt(support);
@@ -381,7 +384,7 @@ test("words sent while a script runs are answered at once: the feed shows the re
       { kind: "llm", status: "done", outcome: "completed" },
     ]);
   } finally {
-    await itx.kv.put("go", "yes");
+    go.open();
   }
   const settled = await untilValue(
     "the script's settlement",
@@ -807,3 +810,15 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
     agentWakes.map(() => []),
   );
 }, 90_000);
+
+/** Lent to a script as `itx.go`: its `await itx.go.wait()` answers once the test calls `open()`. Not a
+ *  KV key: Workers KV caches the script's first "not found" reads, for up to a minute after the put. */
+class Gate extends RpcTarget {
+  #opened = Promise.withResolvers<void>();
+  wait() {
+    return this.#opened.promise;
+  }
+  open() {
+    this.#opened.resolve();
+  }
+}
