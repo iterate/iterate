@@ -110,11 +110,15 @@ export function eventsRow(
   const payloadBytes = new TextEncoder().encode(payload);
   // The budget is of the text as the row's JSON carries it, escaped: every quote and backslash
   // doubles there, so a payload of them, or one that is itself JSON in a string, is twice its
-  // size in the row. Halved until it fits, a round for each doubling of its size; a cut that
-  // splits a character decodes as U+FFFD.
+  // size in the row. Cut to the budget, then scaled down by how far its escapes take it over; a
+  // cut that splits a character decodes as U+FFFD.
+  let kept = payloadBytes.length;
   let text = payload;
-  for (let kept = payloadBytes.length; jsonBytes(text) > EVENTS_PAYLOAD_MAX_BYTES;) {
-    kept = Math.floor(kept / 2);
+  for (let size = jsonBytes(text); size > EVENTS_PAYLOAD_MAX_BYTES; size = jsonBytes(text)) {
+    kept =
+      kept > EVENTS_PAYLOAD_MAX_BYTES
+        ? EVENTS_PAYLOAD_MAX_BYTES
+        : Math.floor((kept * EVENTS_PAYLOAD_MAX_BYTES) / size);
     text = new TextDecoder().decode(payloadBytes.subarray(0, kept));
   }
   const { principal, cause } = event.source;

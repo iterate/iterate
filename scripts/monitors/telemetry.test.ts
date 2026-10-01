@@ -2,6 +2,7 @@
 // them, the lake's pipelines, their dropped rows and its destinations as Cloudflare answers them,
 // and what the findings owe the page. The calls themselves are proven against the dev account.
 import { expect, test } from "vitest";
+import { osEnvs, telemetryEnvs } from "../../envs.ts";
 import {
   ALERT_RULES,
   destinationFindings,
@@ -14,6 +15,12 @@ import {
 } from "./telemetry.ts";
 
 const [pending, deliveryP99] = ALERT_RULES;
+
+test("the dev lake's rules judge main on dev: renamed, they would judge nothing and stay green", () => {
+  expect(telemetryEnvs.preview).toMatchObject({
+    alertRulesWorkerName: osEnvs.preview!.workerName,
+  });
+});
 
 test.for<{
   name: string;

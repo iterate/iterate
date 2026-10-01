@@ -1997,6 +1997,21 @@ test.for([
   );
 });
 
+test("metrics: a fan-out row's burst is timed by its own longest wait, never an earlier burst's", async () => {
+  const rig = fanOutRig({});
+  fakeClock();
+  rig.pings(1);
+  vi.setSystemTime(Date.now() + 60_000); // ping 1's subscriber answers a minute on
+  await drainDeliveries();
+  rig.pings(2);
+  await drainDeliveries();
+  expect(
+    rig.measured
+      .filter(({ name }) => name === "subscription.delivery_ms")
+      .map(({ value }) => value),
+  ).toEqual([60_000, 0]);
+});
+
 // An event's age is not how long it waited: only an event committed after its row was is timed.
 test.for([
   { name: "a cursor row", row: { name: "s", target: "itx.sink.push" } },

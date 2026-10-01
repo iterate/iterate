@@ -37,16 +37,16 @@ const Resource = z.object({ attributes: Attributes }).default({});
  *  them is a time a Date holds, so `isoTime` and a span's duration cannot throw. */
 const UnixNano = z.string().regex(/^\d{1,20}$/);
 
-/** A batch of logs down to its records, each as it came: `logRows` parses those one by one. */
+/** A batch of logs down to its records, each as it came: `logRows` parses those one by one. Its
+ *  three lists are required: a body without them is no batch of logs (a batch of spans, an export
+ *  whose format changed), and parsed as an empty one it would be a quiet 200. */
 export const OtlpLogs = z.object({
-  resourceLogs: z
-    .array(
-      z.object({
-        resource: Resource,
-        scopeLogs: z.array(z.object({ logRecords: z.array(z.unknown()).default([]) })).default([]),
-      }),
-    )
-    .default([]),
+  resourceLogs: z.array(
+    z.object({
+      resource: Resource,
+      scopeLogs: z.array(z.object({ logRecords: z.array(z.unknown()) })),
+    }),
+  ),
 });
 const LogRecord = z.object({
   timeUnixNano: UnixNano.default("0"),
@@ -57,16 +57,15 @@ const LogRecord = z.object({
   spanId: z.string().optional(),
 });
 
-/** A batch of spans down to its spans, each as it came: `spanRows` parses those one by one. */
+/** A batch of spans down to its spans, each as it came: `spanRows` parses those one by one. Its
+ *  lists are required, as a batch of logs' are. */
 export const OtlpTraces = z.object({
-  resourceSpans: z
-    .array(
-      z.object({
-        resource: Resource,
-        scopeSpans: z.array(z.object({ spans: z.array(z.unknown()).default([]) })).default([]),
-      }),
-    )
-    .default([]),
+  resourceSpans: z.array(
+    z.object({
+      resource: Resource,
+      scopeSpans: z.array(z.object({ spans: z.array(z.unknown()) })),
+    }),
+  ),
 });
 const Span = z.object({
   traceId: z.string(),
@@ -262,17 +261,21 @@ function capped(json: string) {
   return { text: cut(json, JSON_COLUMN_MAX_BYTES), bytes: utf8Bytes(json) };
 }
 
-/** `value`, halved until it takes at most `maxBytes` of a row's JSON. A row is sent as JSON, where
- *  a control character is six bytes and a quote two, so the text's own size bounds nothing.
- *  Halving takes a few passes whatever the text holds. A half that ends inside a surrogate pair
- *  ends in U+FFFD: a lone surrogate's escape is JSON a stream may refuse. */
+/** `value`, cut to take at most `maxBytes` of a row's JSON. A row is sent as JSON, where a control
+ *  character is six bytes and a quote two, so the text's own size bounds nothing: it is cut to the
+ *  budget, then scaled down by how far its escapes take it over, a pass or two whatever it holds.
+ *  A cut that ends inside a surrogate pair ends in U+FFFD: a lone surrogate's escape is JSON a
+ *  stream may refuse. */
 function cut(value: string, maxBytes: number) {
   let kept = value;
-  while (utf8Bytes(JSON.stringify(kept)) > maxBytes)
-    kept = kept.slice(0, kept.length / 2).toWellFormed();
+  for (let size = jsonBytes(kept); size > maxBytes; size = jsonBytes(kept))
+    kept = kept
+      .slice(0, kept.length > maxBytes ? maxBytes : Math.floor((kept.length * maxBytes) / size))
+      .toWellFormed();
   return kept;
 }
 
+const jsonBytes = (value: string) => utf8Bytes(JSON.stringify(value));
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 
 /** OTLP's nanoseconds since the epoch as RFC 3339, to the millisecond. */

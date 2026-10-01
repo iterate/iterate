@@ -113,9 +113,15 @@ export async function copyMetrics(input: {
   copiedThrough: number | undefined;
   now: Date;
   keepWatermark: ((hour: number) => void) | undefined;
+  /** How it reads Analytics Engine and sends to the lake's `metrics` stream: Cloudflare's APIs with
+   *  the account's token, unless a test names its own. */
+  api?: {
+    sql: (sql: string) => Promise<AnalyticsEngineRow[]>;
+    send: (body: string) => Promise<unknown>;
+  };
 }) {
   const { lake, env } = input;
-  const apiToken = cloudflareApiToken(env);
+  const { sql, send } = input.api || cloudflare(env);
   if (input.copiedThrough === undefined)
     console.log(
       `[metrics copy] ${lake} has no watermark: starting at the last closed hour, the hours before it are not copied`,
@@ -127,29 +133,40 @@ export async function copyMetrics(input: {
   for (const hour of hoursToCopy(input.copiedThrough, input.now)) {
     const at = `${lake} ${new Date(hour * 1_000).toISOString()}`;
     const during = `FROM iterate_metrics WHERE timestamp >= toDateTime(${hour}) AND timestamp < toDateTime(${hour + HOUR_S})`;
-    const points = await analyticsEngineSql(
-      env,
-      apiToken,
+    const points = await sql(
       `SELECT toUnixTimestamp(timestamp) AS unix, blob1 AS name, blob2 AS kind, blob3 AS worker, blob4 AS project_id, blob5 AS path, blob6 AS labels, double1 AS value, _sample_interval AS weight ${during}`,
     );
     // THE READ NAMES NO LIMIT, and Analytics Engine documents none of its own: it answered all
     // 10,883 points of the dev account's fullest hour (2026-10-01). Should it ever cut an answer
     // short, the hour's own count says so before the watermark passes a hole. Same hour and
     // filter, so both read the same stored points.
-    const [counted] = await analyticsEngineSql(env, apiToken, `SELECT count() AS points ${during}`);
+    const [counted] = await sql(`SELECT count() AS points ${during}`);
     const stored = z.coerce.number().parse(counted?.points);
     if (points.length < stored)
       throw new Error(`${at}: Analytics Engine answered ${points.length} of ${stored} points`);
     const rows = metricsRows(points);
+    // One point that is no point is skipped; an hour of them is an answer whose shape changed, and
+    // a watermark moved past it would leave the hour out of the lake for good.
+    if (points.length > 0 && rows.length === 0)
+      throw new Error(`${at}: none of Analytics Engine's ${points.length} points is a point`);
     const bodies = chunks(rows);
     const summary = `${at}: ${rows.length} rows in ${bodies.length} chunk(s), ${points.length - rows.length} unreadable point(s) skipped`;
     if (!input.keepWatermark) {
       console.log(`[metrics copy] [dry run] would send ${summary}`);
       continue;
     }
-    for (const body of bodies)
-      await cloudflarePost(`https://${env.streams.metrics}.ingest.cloudflare.com`, apiToken, body);
+    for (const body of bodies) await send(body);
     input.keepWatermark(hour);
     console.log(`[metrics copy] sent ${summary}`);
   }
+}
+
+/** A lake's reads and sends through Cloudflare's APIs, with its account's token. */
+function cloudflare(env: TelemetryEnv) {
+  const apiToken = cloudflareApiToken(env);
+  return {
+    sql: (sql: string) => analyticsEngineSql(env, apiToken, sql),
+    send: (body: string) =>
+      cloudflarePost(`https://${env.streams.metrics}.ingest.cloudflare.com`, apiToken, body),
+  };
 }

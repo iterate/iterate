@@ -248,10 +248,12 @@ export async function run(options: {
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
   else
-    await sendPostHogEvents(events, {
-      apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
-      host: "https://eu.i.posthog.com",
-    });
+    await attempt("PostHog events", () =>
+      sendPostHogEvents(events, {
+        apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
+        host: "https://eu.i.posthog.com",
+      }),
+    );
   // THE METRICS COPY COMES LAST AND KEEPS ITS OWN PROGRESS: a slow Analytics Engine then delays no
   // page, and a failed post loses no watermark. `metrics` has no key to dedupe on, so an hour sent
   // and not remembered is sent again and stays double: each hour's watermark is in the state file

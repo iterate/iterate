@@ -68,20 +68,20 @@ const rows = [
     row: { payload: "false", payload_bytes: 5 },
   },
   {
-    name: "a payload over 512 KB is halved, and payload_bytes stays its whole size",
-    // 9 bytes of `{"text":"`, then two per é: the cut halves one, which decodes as U+FFFD
+    name: "a payload over 512 KB is cut to fit, and payload_bytes stays its whole size",
+    // 9 bytes of `{"text":"`, three of whose quotes the row's JSON escapes, then two per é
     event: committed({ payload: { text: "é".repeat(300_001) } }),
     row: {
-      payload: `{"text":"${"é".repeat(149_998)}�`,
+      payload: `{"text":"${"é".repeat(262_136)}`,
       payload_bytes: 600_013,
     },
   },
   {
-    name: "a payload under 512 KB that the row's JSON escapes to over it is halved too",
+    name: "a payload under 512 KB that the row's JSON escapes to over it is cut too",
     // 200,000 backslashes are 400,000 bytes of payload, and 800,000 of the row's JSON
     event: committed({ payload: { text: "\\".repeat(200_000) } }),
     row: {
-      payload: `{"text":"${"\\".repeat(199_996)}`,
+      payload: `{"text":"${"\\".repeat(262_136)}`,
       payload_bytes: 400_011,
     },
   },
@@ -136,6 +136,27 @@ test.for([
       { level: "warn", event: "telemetry.events-dropped", path: "/agents/web/1" },
       { level: "warn", event: "telemetry.events-dropped", projectId: "prj_1", count: 3 },
     ],
+  },
+  {
+    name: "what a send took no longer waits: 8 MB more fit behind the 8 MB that went, with no drop",
+    steps: [
+      { events: [1] },
+      { events: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], kb: 500 },
+      { succeeds: true },
+      { succeeds: true },
+      { events: [18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33], kb: 500 },
+      { succeeds: true },
+      { succeeds: true },
+      { succeeds: true },
+    ],
+    sent: [
+      [1],
+      [2, 3, 4, 5, 6, 7, 8, 9],
+      [10, 11, 12, 13, 14, 15, 16, 17],
+      [18, 19, 20, 21, 22, 23, 24, 25],
+      [26, 27, 28, 29, 30, 31, 32, 33],
+    ],
+    logged: [],
   },
   {
     name: "a row over 1 MB, which would fail its whole send, is dropped: an event type of 1.1 MB",

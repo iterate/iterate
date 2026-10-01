@@ -119,6 +119,20 @@ test.for([
     },
   },
   {
+    name: "a batch of spans posted as logs is answered 400: read as no logs, it would be a quiet 200",
+    request: post("/v1/logs", JSON.stringify({ resourceSpans: [] })),
+    expected: {
+      status: 400,
+      warned: [
+        {
+          event: "telemetry.batch-unreadable",
+          pathname: "/v1/logs",
+          message: expect.stringContaining("resourceLogs"),
+        },
+      ],
+    },
+  },
+  {
     name: "a batch with a record that does not parse lands the others, and the skip is logged",
     request: post("/v1/logs", JSON.stringify(lines({}, { timeUnixNano: "yesterday" }, {}))),
     expected: {

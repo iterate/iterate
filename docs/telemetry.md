@@ -208,11 +208,12 @@ Nothing waits on telemetry, and no failure of it reaches a caller.
 - **The platform hook** queues each event's row in its context's outbox
   (`core/os/src/platform-hook.ts`): one send is out at a time, with every row that was waiting, up
   to 4 MB. A send that fails loses its rows and is logged under its kind
-  (`telemetry.platform-failure-send`, `telemetry.deploy-reset-send`, or an issue); rows of a send
-  that is out when the context resets are lost and nothing says so. An event that finds 8 MB
+  (`telemetry.platform-failure-send`, `telemetry.deploy-reset-send`, or an issue); the rows waiting,
+  and those of a send that is out, are lost when the context resets, and nothing says so. An event that finds 8 MB
   already waiting, or whose row is over 1 MB, is dropped and counted (`telemetry.events-dropped`).
-- **`apps/telemetry`** answers 503 when a send fails or the secret is wrong
-  (`telemetry.secret-refused`), so Cloudflare sends the batch again (it did through a 12-minute
+- **`apps/telemetry`** answers 503 when the platform fails a send or the secret is wrong
+  (`telemetry.secret-refused`), and a send that fails any other way escapes as a 500, so Cloudflare
+  sends the batch again (it did through a 12-minute
   outage) and rotating the secret loses nothing. A batch it cannot read at all is answered 400
   (`telemetry.batch-unreadable`), since sending it again cannot help; a record that does not parse
   or whose row is over 1 MB, is skipped and counted (`telemetry.records-skipped`). A batch sent
@@ -270,7 +271,8 @@ prd):
 
 A `core/os` deployment takes part only when its `APP_CONFIG` names the lake's two bindings:
 `telemetry: { eventsStreamBinding, metricsDatasetBinding }`. Unset, the default, it has no lake:
-the platform hook returns before it builds a row, `metrics` writes nothing, and what is left is a
+the platform hook is handed every durable event, as it was before the lake, and builds no row,
+`metrics` writes nothing, and what is left is a
 `WORKER_NAME` var, `iterate.project_id` and `iterate.path` on each context's spans, and two numbers
 kept per fan-out row. A name the Worker holds no binding under throws at its first request, naming
 the field: a lake that silently received nothing would look like a quiet day. For iterate's own

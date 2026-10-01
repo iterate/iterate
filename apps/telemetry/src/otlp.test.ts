@@ -302,15 +302,15 @@ test.for([
     ],
   },
   {
-    name: "a JSON column over 512 KB is halved until it fits, whole characters only, and keeps its whole size",
-    // 300,002 UTF-16 units, whose half ends inside a pair
+    name: "a JSON column over 512 KB is cut to fit, whole characters only, and keeps its whole size",
+    // 600,004 bytes, scaled to a cut that ends inside a pair: the half character goes
     rows: logsOf(lines({ body: { stringValue: "😀".repeat(150_001) } })),
     expected: [
       {
         ...producer,
         time: "2026-09-30T13:03:12.219Z",
         level: "info",
-        body: `${"😀".repeat(75_000)}\ufffd`,
+        body: "😀".repeat(131_071),
         body_bytes: 600_004,
       },
     ],
@@ -347,12 +347,12 @@ test.for([
   {
     name: "a body of control characters",
     rows: logsOf(lines({ body: { stringValue: "\u0000".repeat(512 * 1024) } })),
-    expected: [{ kept: 65_536, whole: 524_288, json: 393_332 }],
+    expected: [{ kept: 87_381, whole: 524_288, json: 524_402 }],
   },
   {
     name: "a body of quotes",
     rows: logsOf(lines({ body: { stringValue: '"'.repeat(400_000) } })),
-    expected: [{ kept: 200_000, whole: 400_000, json: 400_116 }],
+    expected: [{ kept: 262_143, whole: 400_000, json: 524_402 }],
   },
   {
     name: "an object body, whose JSON is escaped again inside the row's",
@@ -363,7 +363,7 @@ test.for([
         },
       }),
     ),
-    expected: [{ kept: 150_002, whole: 600_011, json: 300_114 }],
+    expected: [{ kept: 262_145, whole: 600_011, json: 524_400 }],
   },
   {
     name: "an uncaught exception's megabyte of message and of stack",
@@ -373,7 +373,7 @@ test.for([
         attributes: exceptionAttributes("m".repeat(1_000_000), "\n".repeat(1_000_000)),
       }),
     ),
-    expected: [{ kept: 500_000, whole: 1_000_000, exception: 15_625, stack: 7_812, json: 531_392 }],
+    expected: [{ kept: 524_286, whole: 1_000_000, exception: 16_382, stack: 8_191, json: 557_193 }],
   },
   {
     name: "a span's attributes and its exception event",
@@ -383,7 +383,7 @@ test.for([
         events: [{ name: "exception", attributes: exceptionAttributes('"'.repeat(1_000_000), "") }],
       }),
     ),
-    expected: [{ kept: 250_002, whole: 2_000_019, exception: 7_812, json: 515_861 }],
+    expected: [{ kept: 262_147, whole: 2_000_019, exception: 8_193, json: 540_913 }],
   },
 ])("$name is cut until its row fits a stream", ({ rows, expected }) => {
   // exact: `json` is what the cut is for
@@ -425,19 +425,32 @@ test.for([
     },
   },
   {
-    name: "a resource left out is no Worker's, and what OTLP JSON leaves out as empty is empty",
-    batch: logRows(
-      OtlpLogs.parse({ resourceLogs: [{ scopeLogs: [{ logRecords: [{}] }] }, { resource }, {}] }),
-    ),
-    expected: { rows: [], skipped: [] },
-  },
-  {
-    name: "a batch of nothing is no rows",
-    batch: spanRows(OtlpTraces.parse({})),
+    name: "a resource left out is no Worker's: its records land no rows",
+    batch: logRows(OtlpLogs.parse({ resourceLogs: [{ scopeLogs: [{ logRecords: [{}] }] }] })),
     expected: { rows: [], skipped: [] },
   },
 ])("$name", ({ batch, expected }) => {
   expect(batch).toMatchObject(expected);
+});
+
+// A body without a batch's lists is no batch: parsed as an empty one, an export whose format
+// changed would be answered 200 and land nothing, and nothing would say so.
+test.for([
+  { name: "nothing", schema: OtlpTraces, body: {} },
+  { name: "a batch of spans, for logs", schema: OtlpLogs, body: { resourceSpans: [] } },
+  { name: "a resource with no scopes", schema: OtlpLogs, body: { resourceLogs: [{ resource }] } },
+  {
+    name: "a scope whose records go by another name",
+    schema: OtlpLogs,
+    body: { resourceLogs: [{ resource, scopeLogs: [{ log_records: [] }] }] },
+  },
+  {
+    name: "a scope with no spans",
+    schema: OtlpTraces,
+    body: { resourceSpans: [{ resource, scopeSpans: [{}] }] },
+  },
+])("$name is no batch", ({ schema, body }) => {
+  expect(schema.safeParse(body)).toMatchObject({ success: false });
 });
 
 test("every row of the fixtures and of OTLP's defaults fits its stream's schema", () => {
