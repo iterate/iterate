@@ -9,10 +9,11 @@ Misha decided on 2026-10-01: iterate/iterate becomes a public archive, and work 
 private iterate/private, created as one fresh initial commit (no shared history; PR numbers
 restart). These changes land on iterate/iterate first and behave the same there until the cutover.
 
-Status: mostly built, verifying. Done: Depot and GitHub calls name the running repository,
-workflow YAML read with the job's token, release without tags, Copybara's per-run origin and
-re-seed (tested against the real jar), the MCP examples in core. Left: CI green, and ci-reports'
-sign-in, which waits on Misha's choice between Cloudflare Access and sign in with iterate.
+Status: built; PR #3507 green before the Access commits. Done: Depot and GitHub calls name the
+running repository, workflow YAML read with the job's token, release without tags, Copybara's
+per-run origin and re-seed (tested against the real jar), the MCP examples in core, and ci-reports
+behind Cloudflare Access in code. Left: creating the `ci-reports` Access application (needs Misha's
+OK: it gates the live viewer at once), and at the cutover a GitHub token for private explainers.
 
 Out of scope: package URLs (`tasks/package-urls-survive-repo-move.md`, in Misha's root checkout),
 kit firmware (its own repo later).
@@ -50,8 +51,14 @@ kit firmware (its own repo later).
 - **One App token for the copies and the source**, `contents: write` on all three: git's credential
   store holds one per host. Copybara never pushes to its origin, and the job already holds the App's
   key, so a narrower token for the source would not narrow what the job can do.
-- **ci-reports**: the auth choice is Misha's (see below). Its `iterate/iterate` check stays: it is
-  what keeps a private repo's reports off a public viewer until sign-in exists.
+- **ci-reports: Cloudflare Access** (Misha, 2026-10-01). The Worker refuses any request Access
+  didn't authenticate (`ctx.access`, set by the runtime; no JWT code), so Access turned off closes
+  the viewer. With that gate the `iterate/iterate` check goes, and iterate/private's reports are
+  served alike. One worker-level Access application on the dev/preview account's existing Zero Trust
+  (team `iterate-dev-preview`, Google Workspace for nustom.com and one-time PIN already set up),
+  allowing `nustom.com`, as its Herdr app does. It is created once by hand, not by the deploy: the
+  deploy's smoke checks `/` redirects to Access's sign-in. No service token yet: nothing reads
+  the viewer from a script.
 - **MCP examples** move to `core/os/examples/mcp-run-scripts.mjs` (ships in iterate/core), the
   instructions link it on iterate/core, and the MCP e2e runs every script in it, as
   `serve-localhost.mjs` is pinned.
@@ -70,7 +77,12 @@ kit firmware (its own repo later).
       locally)_
 - [x] ci-reports: what Depot does with a private repo's artifacts; Access vs sign in with iterate,
       for Misha _(below)_
-- [ ] sign-in for ci-reports, once Misha chooses
+- [x] ci-reports behind Cloudflare Access _(Misha's choice; `src/worker.ts` gate and test, no repo
+      check, deploy smoke, `vite dev` identity, docs)_
+- [ ] create the `ci-reports` Access application (worker destination, allow `nustom.com`), with
+      Misha's OK
+- [ ] at the cutover: explainers read iterate/private with a GitHub token (`explainer.ts` reads
+      iterate/iterate anonymously until then)
 - [x] MCP example in `core/os/examples/`, link, e2e, `core/os/README.md` _(`mcp-run-scripts.mjs`)_
 - [x] typecheck, lint, knip, format, tests _(locally; see notes for the two local-only failures)_
 - [ ] CI green on the PR
@@ -90,7 +102,7 @@ needs a read-only GitHub credential (a fine-grained token, `contents: read` on i
 that only after sign-in, or it serves private files publicly. Not the iterate App's key: the viewer
 lives on the dev/preview account, and that key is prd's.
 
-**Recommendation: Cloudflare Access.** Access is Cloudflare's login wall in front of a hostname.
+**Recommendation: Cloudflare Access** (chosen). Access is Cloudflare's login wall in front of a hostname.
 Before a request reaches the Worker, Cloudflare checks for its own session cookie; without one the
 visitor gets Cloudflare's sign-in page (GitHub, Google, or a one-time code by email), and a policy
 says who gets in (members of the `iterate` GitHub org, or `@iterate.com` emails). It then forwards
@@ -113,7 +125,8 @@ dashboard unless we script it. Sign in with iterate would follow `apps/admin` (`
 
 - iterate/private: Depot CI connected, its secrets (`DOPPLER_TOKEN`), rulesets.
 - Comments that say `depot ci dispatch --repo iterate/iterate` (`.depot/workflows/*.yml`).
-- ci-reports: sign-in, then its repository check and an authenticated explainer read.
+- ci-reports: an authenticated explainer read of iterate/private (a fine-grained GitHub token,
+  `contents: read`, in Doppler `_shared/preview`).
 - Template references (`github:iterate/iterate#<sha>&path:configs/<name>`) and
   `app-build.tsx`'s commit links: done in iterate/iterate#3506, merged into this branch.
 
