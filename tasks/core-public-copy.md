@@ -9,7 +9,10 @@ The payoff of the core pre-work. `core/` builds from a clone of itself (#3486, #
 #3492), so it can be copied to a public `iterate/os` after every production deploy, with Copybara,
 as the experiment (#3434, iterate/os0929) proved. Nothing flows back.
 
-Status: not started.
+Status: implemented; waiting on CI, then the first copy after merge. iterate/os exists (public,
+empty); the copy's check passes locally (Copybara's folder at this PR's head installs from its own
+lockfile, builds, dry-run deploys, stays clean); the App mints a write token for it. Left: merge,
+and the first deploy's copy job seeding it.
 
 ## Decisions
 
@@ -41,14 +44,14 @@ differences for the real thing, my calls where Misha didn't say:
 
 ## Checklist
 
-- [ ] `copybara/copy.bara.sky`: the `os` workflow to iterate/os, the files above
-- [ ] `copybara/os/`: README, package.json, .gitignore, the generated workspace and lockfile
-- [ ] `scripts/ci/copybara.ts`: sync, seed an empty copy, the sync check, the recipe check, the
-      root generator, and a `--to-folder` run for pull requests
-- [ ] `scripts/ci/iterate-app-token.ts` shared with the flake dashboard
-- [ ] Deploy OS's copy job; Preview OS's folder-only check when the copy's inputs change
-- [ ] create `iterate/os` (public, empty)
-- [ ] the self-host recipe clones iterate/os
+- [x] `copybara/copy.bara.sky`: the `os` workflow to iterate/os, the files above
+- [x] `copybara/os/`: README, package.json, .gitignore, the generated workspace and lockfile
+- [x] `scripts/ci/copybara.ts`: sync, seed an empty copy, the sync check, the recipe check, the
+      root generator, and a `--to-folder` run for pull requests _(`check`)_
+- [x] `scripts/ci/iterate-app-token.ts` shared with the flake dashboard
+- [x] Deploy OS's copy job; Preview OS's folder-only check when the copy's inputs change _(its own workflow, `.depot/workflows/copybara.yml`, path-filtered, off the required checks)_
+- [x] create `iterate/os` (public, empty) _(2026-10-01)_
+- [x] the self-host recipe clones iterate/os
 - [ ] typecheck, lint, knip, format, tests; CI green; after merge, the first copy and its checks
 
 ## Out of scope
@@ -57,3 +60,11 @@ differences for the real thing, my calls where Misha didn't say:
 - Taking contributions back from the copy.
 
 ## Implementation notes
+
+- The root generator broke twice on today's main, both now handled: pnpm's first pass rewrites
+  the scratch workspace with single-quoted keys (the patch filter matched double quotes only), and
+  `cleanupUnusedCatalogs` drops `@codemirror/state` from the copy's catalog while an override still
+  names it (core/os stopped using packages/ui in #3486). The workspace is now edited as a YAML
+  document: patches and overrides of packages the copy doesn't resolve are dropped.
+- Not done, Misha's call: a ruleset on iterate/os that refuses pushes from anyone but the App, so
+  nobody edits the copy by hand (the sync check catches it, and the next copy overwrites it).
