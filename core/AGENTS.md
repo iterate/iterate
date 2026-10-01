@@ -1,6 +1,6 @@
 # core
 
-What goes public as `iterate/os`: the platform Worker (`os/`), and npm `iterate` (`lib/`), which is
+What goes public as `iterate/core`: the platform Worker (`os/`), and npm `iterate` (`lib/`), which is
 the SDK and the `iterate` CLI.
 
 - **Core builds from a clone of itself.** Nothing in `core/` imports outside `core/`; outside code may

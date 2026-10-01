@@ -1,0 +1,80 @@
+# THE ONE-WAY PUBLIC COPIES (tasks/complete/2026-10-01-core-public-copy.md): after every
+# production deploy, scripts/ci/copybara.ts copies the commits up to the deployed one. Nothing
+# flows back.
+#
+#   core       iterate/core: core/, and the root files it needs to install and build
+#   packages   iterate/packages: packages/ and the project templates in configs/
+#
+# Each copy keeps this repo's paths, so a path means the same file in both. `copybara/<name>/` holds
+# the files that exist only at that copy's root (its README, and for core its package.json,
+# .gitignore, and the workspace and lockfile `copybara.ts workspace-files` generates), moved there
+# verbatim. Copybara only reads a config named copy.bara.sky, so both copies share this one file.
+#
+# Every commit that touches a copy's files becomes one copy commit, ending in a
+# `GitOrigin-RevId: <origin sha>` trailer. A run copies whatever came after the newest trailer, so a
+# missed run is caught up by the next one.
+
+# The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
+# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
+# its own (one mentioned mid-sentence is text). A section with no closing marker is left out. A
+# squash merge's message is the PR's title and body, and HTML comments survive into it, as the
+# loc-report and os-preview sections do.
+def copy_message(ctx):
+    lines = ctx.message.split("\n")
+    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(lines[0]).replace_all(" (iterate/iterate#$1)")
+    sections = []
+    section = None
+    for line in lines[1:]:
+        if line.strip() == "<!-- copybara -->":
+            section = []
+        elif line.strip() == "<!-- /copybara -->" and section != None:
+            if "\n".join(section).strip():
+                sections.append("\n".join(section).strip())
+            section = None
+        elif section != None:
+            section.append(line)
+    ctx.set_message("\n\n".join([title] + sections) + "\n")
+
+def copy_workflow(name, files):
+    core.workflow(
+        name = name,
+        origin = git.origin(
+            url = "https://github.com/iterate/iterate",
+            # the default ref; scripts/ci/copybara.ts always names the commit to copy up to
+            ref = "main",
+            # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+            partial_fetch = True,
+        ),
+        origin_files = glob(files + ["LICENSE", "copybara/%s/**" % name]),
+        destination = git.destination(
+            url = "https://github.com/iterate/%s" % name,
+            push = "main",
+            fetch = "main",
+        ),
+        destination_files = glob(["**"]),
+        mode = "ITERATIVE",
+        authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
+        transformations = [
+            core.move("copybara/%s" % name, ""),
+            copy_message,
+        ],
+    )
+
+# What the self-host recipe (core/os/public/setup-prompt.md) installs and builds: core/, the root
+# tsconfigs its tsconfigs extend and the Node version. The root package.json, pnpm-workspace.yaml and
+# pnpm-lock.yaml are the copy's own, in copybara/core/ (scripts/ci/copybara.ts workspace-files).
+copy_workflow("core", [
+    "core/**",
+    "tsconfig.base.json",
+    "tsconfig.app.json",
+    ".nvmrc",
+    # The copy's pnpm-workspace.yaml names the patches its packages need (today zod's), and pnpm
+    # refuses to install when a named patch file is missing. The whole folder, so a patch for a new
+    # version is copied the day the workspace names it.
+    "patches/**",
+])
+
+# The packages anyone can install, and the project templates that depend on them, as source to read
+# (the copy installs and builds nothing): a self-host bakes the templates from here with
+# `--template "github:iterate/packages#main&path:configs/<name>"`.
+copy_workflow("packages", ["packages/**", "configs/**"])

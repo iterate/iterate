@@ -4,7 +4,7 @@ A recipe for a coding agent. If you were asked to set someone up with iterate.co
 self-hosted iterate, follow it.
 
 End state: `https://iterate.<subdomain>.workers.dev/mcp` is a working remote MCP server in the user's
-agents. iterate OS (`core/os` in https://github.com/iterate/iterate) is one Worker: sign-in and
+agents. iterate OS (`core/os` in https://github.com/iterate/core) is one Worker: sign-in and
 OAuth, `/mcp` (one tool, `run({ project, script })`, which evaluates `async (itx) => …` against a
 project), and a Durable Object per project.
 
@@ -30,16 +30,16 @@ so say which flow a page is for when you open it.
 ## 1. Build
 
 ```bash
-git clone --depth 1 https://github.com/iterate/iterate   # gitignored
+git clone --depth 1 https://github.com/iterate/core iterate   # gitignored
 cd iterate && pnpm install
-sha=$(git rev-parse HEAD)
 CLOUDFLARE_ENV=self-host pnpm --filter os build \
-  --template "github:iterate/iterate#$sha&path:configs/default" \
-  --template "github:iterate/iterate#$sha&path:configs/heartbeat"
+  --template "github:iterate/packages#main&path:configs/default" \
+  --template "github:iterate/packages#main&path:configs/heartbeat"
 # writes core/os/dist/server/wrangler.json
 ```
 
-Each `--template` is a project template the deployment offers, downloaded from GitHub. A new
+Each `--template` is a project template the deployment offers, downloaded from GitHub (iterate's
+live in https://github.com/iterate/packages) and pinned to the commit `main` is at then. A new
 project, the user's first included, starts from `default`: the agents and voice apps. A bare
 homepage ("Blank" in the dash) is always offered; without any `--template`, every project starts as
 one.
