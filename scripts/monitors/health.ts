@@ -11,15 +11,17 @@
 //                             (./ttg.ts)
 //   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
 //                             its own daily thread and pages
-//   telemetry                 the health job: the alert rules, Pipelines' dropped rows and the OTLP
-//                             destinations of every telemetry lake (./telemetry.ts); after the checks,
-//                             a real run on main copies the closed hours of metrics into the lake
-//                             (./metrics-copy.ts)
+//   telemetry                 the health job: the alert rules, the pipelines, their dropped rows and
+//                             the OTLP destinations of every telemetry lake (./telemetry.ts)
 //
 // Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
 // `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
 // the health job after the others have paged, so a page never turns a job red. Main OS e2e's page
 // job has its own broken-probe rule (./e2e.ts) and fails only when it cannot judge its run or post.
+//
+// The health job's last step is no signal: once its pages are sent and its state kept, a real run
+// on main copies the closed hours of metrics into each telemetry lake (./metrics-copy.ts), and keeps
+// the state again after each hour sent.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes, after its posts: its checks'
@@ -39,7 +41,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { osEnvs } from "../../envs.ts";
+import { osEnvs, telemetryEnvs } from "../../envs.ts";
 import { thisWorkflowRun } from "../ci/await-deploy.ts";
 import {
   depotApi,
@@ -175,7 +177,7 @@ export async function sendUpdates(
 }
 
 /** The health job: run every check, send their updates to their pages, keep the state and send
- *  PostHog the checks' events; then throw when a check failed. */
+ *  PostHog the checks' events; then copy the metrics, and throw when a check or the copy failed. */
 export async function run(options: {
   /** The run's git ref: only refs/heads/main pages, keeps state and sends PostHog events. */
   ref: string;
@@ -189,6 +191,7 @@ export async function run(options: {
   dryRun?: boolean;
 }) {
   const depot = depotApi();
+  const { stateOut } = options;
   const { testRun, dryRun, keep } = runMode(options);
   const state = readState(readStateFile(options.state, 2));
   const runUrl = process.env.DEPOT_JOB_URL;
@@ -218,12 +221,6 @@ export async function run(options: {
   const telemetry = await attempt("telemetry", () =>
     checkTelemetry({ memory: state.telemetry, testRun, runUrl, now: new Date() }),
   );
-  // a write, so only a real run on main sends and moves the watermarks: any other prints what it
-  // would send. Each hour moves them as it is sent, so the hours before a failure stay copied.
-  const metricsCopiedThrough = { ...state.metricsCopiedThrough };
-  await attempt("metrics copy", () =>
-    copyMetrics({ copiedThrough: metricsCopiedThrough, send: keep, now: new Date() }),
-  );
   failures.push(...(real?.failures || []), ...(latency?.failures || []));
 
   const realModel = real?.memory || state.e2e;
@@ -237,7 +234,7 @@ export async function run(options: {
       judgedAt: { "OS real model": realModel.judgedAt["OS real model"] },
     },
     telemetry: telemetry ? telemetry.memory : state.telemetry,
-    metricsCopiedThrough,
+    metricsCopiedThrough: state.metricsCopiedThrough,
     pages: state.pages,
   };
   const updates = [
@@ -246,7 +243,7 @@ export async function run(options: {
     ...(ttg?.update ? [ttg.update] : []),
     ...(telemetry?.update ? [telemetry.update] : []),
   ];
-  await postThenKeep({ updates, testRun, dryRun, keep, stateOut: options.stateOut, next });
+  const kept = await postThenKeep({ updates, testRun, dryRun, keep, stateOut, next });
   const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
@@ -255,6 +252,29 @@ export async function run(options: {
       apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
       host: "https://eu.i.posthog.com",
     });
+  // THE METRICS COPY COMES LAST AND KEEPS ITS OWN PROGRESS: a slow Analytics Engine then delays no
+  // page, and a failed post loses no watermark. `metrics` has no key to dedupe on, so an hour sent
+  // and not remembered is sent again and stays double: each hour's watermark is in the state file
+  // as soon as the hour is sent, where the workflow's upload finds it even after a run cut short.
+  // A write, so only a real run on main that can keep its state sends: any other prints what it
+  // would send. Each lake has its own attempt, so one's failure does not hold another's copy back.
+  const metricsCopiedThrough = { ...state.metricsCopiedThrough };
+  for (const [lake, env] of Object.entries(telemetryEnvs))
+    await attempt(`metrics copy: ${lake}`, () =>
+      copyMetrics({
+        lake,
+        env,
+        copiedThrough: metricsCopiedThrough[lake],
+        now: new Date(),
+        keepWatermark:
+          keep && stateOut
+            ? (hour) => {
+                metricsCopiedThrough[lake] = hour;
+                writeState(stateOut, { ...kept, metricsCopiedThrough });
+              }
+            : undefined,
+      }),
+    );
   if (failures.length > 0) throw new Error(`health: ${failures.join("; ")}`);
 }
 
@@ -417,14 +437,14 @@ function readStateFile(path: string | undefined, schemaVersion: 2 | 3): unknown 
 /** Send the run's updates, then keep its state with the pages open after them, in that order: a
  *  state records what was sent, so an update that could not be sent leaves the state as it was and
  *  the next run owes it again (and one sent before it, once more). A dry run prints each message
- *  instead. */
-async function postThenKeep(input: {
+ *  instead. Answers the state with those pages, kept or not. */
+async function postThenKeep<State extends HealthState | MainE2eState>(input: {
   updates: PageUpdate[];
   testRun: boolean;
   dryRun: boolean;
   keep: boolean;
   stateOut?: string;
-  next: HealthState | MainE2eState;
+  next: State;
 }) {
   if (input.updates.length === 0) console.log("\nno change of state, nothing to page");
   const pages = await sendUpdates(input.dryRun ? printingPoster() : slackPoster(input.testRun), {
@@ -433,10 +453,15 @@ async function postThenKeep(input: {
     pages: input.testRun ? {} : input.next.pages,
     testRun: input.testRun,
   });
-  if (input.keep && input.stateOut) {
-    mkdirSync(dirname(input.stateOut), { recursive: true });
-    writeFileSync(input.stateOut, `${JSON.stringify({ ...input.next, pages })}\n`);
-  }
+  const kept = { ...input.next, pages };
+  if (input.keep && input.stateOut) writeState(input.stateOut, kept);
+  return kept;
+}
+
+/** Write a job's state where its workflow uploads it from, whole, for its next run to read. */
+function writeState(stateOut: string, state: HealthState | MainE2eState) {
+  mkdirSync(dirname(stateOut), { recursive: true });
+  writeFileSync(stateOut, `${JSON.stringify(state)}\n`);
 }
 
 /** The pages' channel (`pageChannel`): #error-pulse, or #ci for a test run. */

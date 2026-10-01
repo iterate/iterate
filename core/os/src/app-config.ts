@@ -560,7 +560,8 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
   if (!appConfig) {
     appConfig = parseAppConfig(env, env.CF_VERSION_METADATA?.id?.trim() || "unversioned");
     // Checked here, on the Worker's own env, and not in the parse: the deploy's scripts parse a
-    // deployment's configuration too, and hold no bindings.
+    // deployment's configuration too, and hold no bindings. `env` is read as a record because a
+    // binding's name is the configuration's own, which no type of `env` can name.
     for (const [key, binding] of Object.entries(appConfig.telemetry || {}))
       if (!(env as Record<string, unknown>)[binding])
         throw new Error(

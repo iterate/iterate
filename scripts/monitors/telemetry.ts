@@ -1,12 +1,16 @@
 // scripts/monitors/telemetry.ts — THE TELEMETRY ALERTS, one check of the hourly health job
 // (./health.ts), on every account envs.ts `telemetryEnvs` names (docs/telemetry.md):
-//   rules          each of ALERT_RULES, one flat Analytics Engine query, against its line
-//   dropped rows   Pipelines' user errors over the last hour: rows one of the lake's streams accepted
-//                  and dropped
-//   destinations   the `last_error` of the lake's two OTLP destinations, set while one is failing
-// One page, `telemetry`, is open while anything is red and names each finding (./page.ts
-// `advance`): a finding the open page has not named escalates it. The hourly copy of the metrics
-// into the lake is ./metrics-copy.ts.
+//   rules          each of ALERT_RULES, one flat Analytics Engine query over the lake's one judged
+//                  Worker (envs.ts `alertRulesWorkerName`), against its line
+//   pipelines      each of the lake's four pipelines that is missing or not running
+//   dropped rows   Pipelines' user errors: rows one of the lake's streams accepted and dropped
+//   destinations   each of the lake's two OTLP destinations that is missing, disabled, or failing
+//                  (its `last_error`, set while a push fails)
+// The rules and the dropped rows look back LOOKBACK_MINUTES, the time since the run before; the
+// rest is the account's listings now. Nothing asks whether rows arrived lately: a dev lake is
+// quiet at night. One page, `telemetry`, is open while anything is red and names each finding
+// (./page.ts `advance`): a finding the open page has not named escalates it. The hourly copy of the
+// metrics into the lake is ./metrics-copy.ts.
 import { z } from "zod";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "iterate/platform-retry";
 import { cloudflareAccounts, telemetryEnvs } from "../../envs.ts";
@@ -16,24 +20,38 @@ import { advance, SignalMemory, type PageUpdate } from "./page.ts";
 
 export type TelemetryEnv = (typeof telemetryEnvs)[keyof typeof telemetryEnvs];
 
+/** HOW FAR BACK A RUN LOOKS: the health job's interval and ten minutes more, so a run that starts
+ *  late leaves no minute unjudged. .depot/workflows/health.yml's cron is hourly: a longer interval
+ *  there needs a longer look back here. A minute two runs both judge keeps its page open an hour
+ *  longer, and nothing else. */
+const LOOKBACK_MINUTES = 70;
+
+/** What every rule's query judges: the lake's one Worker since the run before. `{worker}` is the
+ *  lake's `alertRulesWorkerName` (envs.ts says why the dataset's other Workers are not judged). */
+const JUDGED = `blob3 = '{worker}' AND timestamp > NOW() - INTERVAL '${LOOKBACK_MINUTES}' MINUTE`;
+
 /** An alert rule: one flat Analytics Engine query over `iterate_metrics` (blob1…6 are name, kind,
- *  worker, project, path and labels; double1 the value; `_sample_interval` the weight), whose every
- *  row with a `value` over `line` is a finding, named by its other columns. */
+ *  worker, project, path and labels; double1 the value; `_sample_interval` the weight), filtered by
+ *  JUDGED, whose every row with a `value` over `line` is a finding, named by its other columns. */
 export type AlertRule = { name: string; unit: string; line: number; sql: string };
 
 /** The lines are first guesses, not measurements: nothing wrote these metrics before them. */
 export const ALERT_RULES: AlertRule[] = [
+  // Offsets, not events: the gauge is how far a subscription's cursor is behind its stream's
+  // durable head, in a sequence ephemeral events take offsets from and whose events its filter may
+  // skip, plus a fan-out row's deliveries not yet acked
+  // (core/os/src/stream/subscription-delivery.ts): an upper bound on the events it still owes.
   {
     name: "subscription.pending",
-    unit: "events",
+    unit: "offsets behind",
     line: 1_000,
-    sql: `SELECT blob4 AS project_id, blob5 AS path, blob6 AS labels, max(double1) AS value FROM iterate_metrics WHERE blob1 = 'subscription.pending' AND timestamp > NOW() - INTERVAL '15' MINUTE GROUP BY project_id, path, labels ORDER BY value DESC LIMIT 5`,
+    sql: `SELECT blob4 AS project_id, blob5 AS path, blob6 AS labels, max(double1) AS value FROM iterate_metrics WHERE blob1 = 'subscription.pending' AND ${JUDGED} GROUP BY project_id, path, labels ORDER BY value DESC LIMIT 5`,
   },
   {
     name: "subscription.delivery_ms p99",
     unit: "ms",
     line: 60_000,
-    sql: `SELECT quantileExactWeighted(0.99)(double1, _sample_interval) AS value FROM iterate_metrics WHERE blob1 = 'subscription.delivery_ms' AND timestamp > NOW() - INTERVAL '15' MINUTE`,
+    sql: `SELECT quantileExactWeighted(0.99)(double1, _sample_interval) AS value FROM iterate_metrics WHERE blob1 = 'subscription.delivery_ms' AND ${JUDGED}`,
   },
 ];
 
@@ -99,6 +117,26 @@ export function evaluateRule(rule: AlertRule, rows: AnalyticsEngineRow[]): Findi
   });
 }
 
+/** The lake's four pipelines, by the names apps/telemetry/scripts/ensure-resources.ts gives them. */
+const LAKE_PIPELINES = ["events", "logs", "spans", "metrics"].map(
+  (table) => `telemetry_${table}_pipeline`,
+);
+
+/** A pipeline as the account's listing answers it. Cloudflare's API documents `status` as a string
+ *  and no more: a pipeline that runs answered `running` on the dev account, 2026-10-01. */
+type Pipeline = { id: string; name: string; status: string };
+
+/** Each of the lake's pipelines the listing lacks, or lists as anything but running: its table gets
+ *  no rows, which a quiet table alone would not tell. Pure. */
+export function pipelineFindings(pipelines: Pipeline[]): Finding[] {
+  return LAKE_PIPELINES.flatMap((name) => {
+    const pipeline = pipelines.find((candidate) => candidate.name === name);
+    if (pipeline?.status === "running") return [];
+    const key = `${name} not running`;
+    return [{ key, text: `${key}: ${pipeline ? pipeline.status : "missing"}` }];
+  });
+}
+
 /** Pipelines' user errors since `$since`: the rows each pipeline dropped, by kind of error. */
 const DROPPED_ROWS = `query ($accountTag: string!, $since: Time!) { viewer { accounts(filter: { accountTag: $accountTag }) { pipelinesUserErrorsAdaptiveGroups(limit: 100, filter: { datetime_geq: $since }, orderBy: [count_DESC]) { count dimensions { pipelineId errorFamily errorType } } } } }`;
 
@@ -126,25 +164,15 @@ const DroppedRows = z.object({
  *  pipeline listing: the dataset names a pipeline by its id alone, and the account's other
  *  pipelines are not the lake's. Pure. */
 export function droppedRowFindings(data: unknown, pipelines: { id: string; name: string }[]) {
-  // the names apps/telemetry/scripts/ensure-resources.ts gives them
   const lake = new Map(
-    pipelines
-      .filter(({ name }) =>
-        [
-          "telemetry_events_pipeline",
-          "telemetry_logs_pipeline",
-          "telemetry_spans_pipeline",
-          "telemetry_metrics_pipeline",
-        ].includes(name),
-      )
-      .map(({ id, name }) => [id, name]),
+    pipelines.filter(({ name }) => LAKE_PIPELINES.includes(name)).map(({ id, name }) => [id, name]),
   );
   return DroppedRows.parse(data).viewer.accounts.flatMap((account) =>
     account.pipelinesUserErrorsAdaptiveGroups.flatMap(({ count, dimensions }): Finding[] => {
       const name = lake.get(dimensions.pipelineId);
       if (!name) return [];
       const key = `${name} dropped rows (${dimensions.errorFamily}/${dimensions.errorType})`;
-      return [{ key, text: `${key}: ${count} in the last hour` }];
+      return [{ key, text: `${key}: ${count} in the last ${LOOKBACK_MINUTES} minutes` }];
     }),
   );
 }
@@ -154,6 +182,7 @@ export function droppedRowFindings(data: unknown, pipelines: { id: string; name:
 const Destinations = z.array(
   z.object({
     slug: z.string(),
+    enabled: z.boolean(),
     configuration: z.object({
       jobStatus: z
         .object({ last_error: z.string().nullish(), error_message: z.string().nullish() })
@@ -162,17 +191,22 @@ const Destinations = z.array(
   }),
 );
 
-/** The lake's two destinations that are failing now: Cloudflare sets `last_error` when a push fails
- *  and clears it once one succeeds. Reads nothing else of a destination, whose headers hold its
- *  secret. Pure. */
+/** Each of the lake's two destinations that exports nothing now: one the listing lacks, one
+ *  disabled, or one failing (Cloudflare sets `last_error` when a push fails and clears it once one
+ *  succeeds). Reads nothing else of a destination, whose headers hold its secret. Pure. */
 export function destinationFindings(answer: unknown): Finding[] {
-  return Destinations.parse(answer)
-    .filter(({ slug }) => ["telemetry-traces", "telemetry-logs"].includes(slug))
-    .flatMap(({ slug, configuration: { jobStatus } }) => {
-      if (!jobStatus?.last_error) return [];
-      const key = `OTLP destination ${slug} failing`;
-      return [{ key, text: `${key} since ${jobStatus.last_error}: ${jobStatus.error_message}` }];
-    });
+  const destinations = Destinations.parse(answer);
+  return ["telemetry-traces", "telemetry-logs"].flatMap((slug) => {
+    const destination = destinations.find((candidate) => candidate.slug === slug);
+    if (!destination?.enabled) {
+      const key = `OTLP destination ${slug} ${destination ? "disabled" : "missing"}`;
+      return [{ key, text: key }];
+    }
+    const { jobStatus } = destination.configuration;
+    if (!jobStatus?.last_error) return [];
+    const key = `OTLP destination ${slug} failing`;
+    return [{ key, text: `${key} since ${jobStatus.last_error}: ${jobStatus.error_message}` }];
+  });
 }
 
 /** Every finding on one account now. Throws when it cannot read one of them. */
@@ -182,23 +216,29 @@ async function findingsOf(env: TelemetryEnv, now: Date) {
   const account = `/accounts/${env.cloudflareAccountId}`;
   const rules = await Promise.all(
     ALERT_RULES.map(async (rule) =>
-      evaluateRule(rule, await analyticsEngineSql(env, apiToken, rule.sql)),
+      evaluateRule(
+        rule,
+        await analyticsEngineSql(
+          env,
+          apiToken,
+          rule.sql.replace("{worker}", env.alertRulesWorkerName),
+        ),
+      ),
     ),
   );
-  const pipelines = await cf<{ id: string; name: string }[]>(
-    `${account}/pipelines/v1/pipelines?per_page=100`,
-  );
+  const pipelines = await cf<Pipeline[]>(`${account}/pipelines/v1/pipelines?per_page=100`);
   const dropped = await cfGraphql<unknown>({
     apiToken,
     query: DROPPED_ROWS,
     variables: {
       accountTag: env.cloudflareAccountId,
-      since: new Date(now.getTime() - 3_600_000).toISOString(),
+      since: new Date(now.getTime() - LOOKBACK_MINUTES * 60_000).toISOString(),
     },
   });
   const destinations = await cf<unknown>(`${account}/workers/observability/destinations`);
   return [
     ...rules.flat(),
+    ...pipelineFindings(pipelines),
     ...droppedRowFindings(dropped, pipelines),
     ...destinationFindings(destinations),
   ];
@@ -212,6 +252,8 @@ export async function checkTelemetry(input: {
   now: Date;
 }) {
   const findings: Finding[] = [];
+  // ONE LAKE TODAY: a lake that cannot be read throws here, and the findings of the lakes read
+  // before it go unpaged. A second lake gets its own signal, under its own `attempt` (./health.ts).
   for (const [name, env] of Object.entries(telemetryEnvs))
     for (const finding of await findingsOf(env, input.now))
       findings.push({ key: `${name}: ${finding.key}`, text: `${name}: ${finding.text}` });
@@ -243,7 +285,8 @@ export function judgeTelemetry(input: {
   const page = {
     what: `Telemetry: ${findings.length} red`,
     impact: findings.map((finding) => finding.text).join("; "),
-    action: "a dropped row or a failing destination loses telemetry until fixed: docs/telemetry.md",
+    action:
+      "a pipeline not running, a dropped row or a destination not exporting loses telemetry until fixed: docs/telemetry.md",
     link: input.runUrl,
   };
   // red and green are this signal's only states, so `replace` (red ↔ unjudged) never comes

@@ -14,7 +14,9 @@ permissions:
   contents: read
 on:
   schedule:
-    # Hourly, off the other schedules' minutes (:07/:22/:37/:52, :13, :29).
+    # Hourly, off the other schedules' minutes (:07/:22/:37/:52, :13, :29). The telemetry alerts
+    # look back this interval and ten minutes more (scripts/monitors/telemetry.ts
+    # LOOKBACK_MINUTES): a longer interval here needs a longer look back there.
     - cron: "41 * * * *"
   workflow_dispatch:
     inputs:
@@ -53,7 +55,9 @@ jobs:
             --state test-results/health/previous.json \
             --state-out test-results/health/state.json \
             ${{ inputs.test-page == 'true' && '--test-page' || '' }}
-      # The job writes the state only on a real run on main: after its posts, before PostHog.
+      # The job writes the state only on a real run on main: after its posts, before PostHog, and
+      # again after each hour of metrics it then copies, so a run that fails or is cut short during
+      # the copy still uploads the watermark of every hour it sent.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

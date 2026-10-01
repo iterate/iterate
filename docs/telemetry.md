@@ -49,8 +49,9 @@ SELECT CASE WHEN payload_bytes < 2000 THEN json_get_str(payload, 'model') END AS
 FROM telemetry.events GROUP BY 1
 ```
 
-A value over 512 KB is cut there, because a row over 1 MB fails its whole batch. Nothing is
-specific to one event type.
+A row over 1 MB fails its whole batch, so a JSON column is cut to fit 512 KB as the row's JSON
+carries it, escaped (a value full of quotes is twice its size there), and `<column>_bytes` stays
+the whole value's size. Nothing is specific to one event type.
 
 ### events
 
@@ -76,7 +77,7 @@ Cloudflare's own record of each invocation (a fetch, an RPC call, an alarm). Key
 | `trace_id`, `span_id`, `seq` | string, string, int32 | the record's ids; `seq` orders lines within a millisecond                                                        |
 | `event`                      | string                | the body's `event` field, when the body is an object with one; `invocation` for Cloudflare's own record          |
 | `body`, `body_bytes`         | string, int32         | a string as written, an object as JSON; an invocation's message (`GET https://…`) and every attribute it carries |
-| `exception`, `stack`         | string                | `exception.type: exception.message`, `exception.stacktrace`                                                      |
+| `exception`, `stack`         | string                | `exception.type: exception.message`, `exception.stacktrace`, each cut to fit 16 KB                               |
 
 `project_id` and `path` come from the body when it has them; a line without them takes them from
 its span, joined on `span_id`. An invocation row names no project: Cloudflare writes it, and our
@@ -118,8 +119,8 @@ Analytics Engine keeps time to the second, so two points can match in every colu
 
 Analytics Engine samples even at low volume, so counts and sums are weighted —
 `sum(weight)`, `sum(weight * value)` — and percentiles are weighted too:
-`approx_percentile_cont_with_weight(value, weight, 0.99)`. For a gauge such as queue depth, alert
-on its `max`, and read its latest value per path with the newest `time`.
+`approx_percentile_cont_with_weight(value, weight, 0.99)`. For a gauge, alert on its `max`, and
+read its latest value per path with the newest `time`.
 
 ## Metrics
 
@@ -138,6 +139,15 @@ worker, project, path and labels (a layout that can only grow at the end). An in
 250 points; past that `writeDataPoint` throws, so the module drops the point and logs the first
 drop of each isolate. Call it once per batch, never once per item. Timings come from the Workers
 clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
+
+What a context's delivery loop writes today (`core/os/src/stream/subscription-delivery.ts`), each
+labelled `row=<subscription>`:
+
+| metric                     |                                                                                                                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subscription.pending`     | after each alarm pass: the offsets a row is behind the head, plus a fan-out row's deliveries not yet answered. An upper bound on what it owes: ephemeral events take offsets too, and a row's filter passes some events over                                              |
+| `subscription.delivery_ms` | from an event's commit to its subscriber's answer: the oldest event of each batch of an ordered row; the longest of each burst of a fan-out row, or of each hundred events of a burst that does not end. History a row replays from before it was configured is not timed |
+| `subscription.retries`     | a delivery put back on its ladder                                                                                                                                                                                                                                         |
 
 ## Reading
 
@@ -179,40 +189,53 @@ which makes it a project's cost.
 
 ## Settings
 
-| setting                            | value                                                              | why                                                                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| sink roll interval                 | 60 s                                                               | the minimum for Iceberg sinks                                                                                                                       |
-| sink compression, row-group target | zstd, 32 MB                                                        | the 1 GB default made scans read whole files                                                                                                        |
-| partitioning                       | `day(__ingest_ts)`, the sink's own                                 | no sort order exists; filters on `time` prune by file statistics                                                                                    |
-| compaction                         | on, 128 MB target                                                  | a day's ~1,440 files per table merge into a handful                                                                                                 |
-| snapshot expiration                | older than 1 day, keep 5                                           | replaced files are deleted a day after compaction                                                                                                   |
-| OTLP export                        | 100 %, traces and logs, to `telemetry-traces` and `telemetry-logs` | `apps/telemetry` itself exports nothing: it would export itself                                                                                     |
-| traces persisted in Cloudflare     | off, once `spans` is proven                                        | billed from 2026-10-01 at $0.60 per million past 20 M a month; logs stay persisted, since `prd-fault-alarm` and `debug-os-worker` read Workers Logs |
-| retention                          | everything is kept                                                 | no purge job exists yet; the dev account's lake should keep 30 days once one does                                                                   |
+| setting                            | value                                                              | why                                                                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| sink roll interval                 | 60 s                                                               | the minimum for Iceberg sinks                                                                                                                                                                                                        |
+| sink compression, row-group target | zstd, 32 MB                                                        | the 1 GB default made scans read whole files                                                                                                                                                                                         |
+| partitioning                       | `day(__ingest_ts)`, the sink's own                                 | no sort order exists; filters on `time` prune by file statistics                                                                                                                                                                     |
+| compaction                         | on, 128 MB target                                                  | a day's ~1,440 files per table merge into a handful                                                                                                                                                                                  |
+| snapshot expiration                | older than 1 day, keep 5                                           | replaced files are deleted a day after compaction                                                                                                                                                                                    |
+| OTLP export                        | 100 %, traces and logs, to `telemetry-traces` and `telemetry-logs` | `apps/telemetry` itself exports nothing: it would export itself                                                                                                                                                                      |
+| traces persisted in Cloudflare     | off for a deployment with a lake (`traces.persist: false`)         | kept there too, every span is billed a second time: $0.60 per million past 20 M a month, from 2026-10-01. Logs stay persisted: `prd-fault-alarm`, `debug-os-worker` and the Query Builder read Workers Logs                          |
+| retention                          | everything is kept                                                 | nothing can delete rows yet: the catalog has no row or partition expiry and R2 SQL only reads. The routes are an Iceberg engine's `DELETE` on a day's partition (untested against a sink that keeps writing) or a new table a period |
 
 ## Failures
 
-- `apps/telemetry` answers 5xx when a send fails, so Cloudflare retries the batch (it did through a
-  12-minute outage); it answers 503, not 401, to a wrong secret, so rotating the secret loses
-  nothing. A retried batch can land twice: dedupe on each table's key (`metrics` has none: see
-  its copy below).
-- It sends in chunks under 5 MB. A stream accepts a row that breaks its schema and drops it
-  silently, so tests check every row the flattening makes against its schema, and the health job
-  alerts on dropped rows.
-- The platform hook sends without waiting: an event in flight when a context resets is lost,
-  logged as `telemetry.send-failed`.
-- The health job copies the closed hours of metrics after a watermark it keeps in its state, 24 a
-  run, and moves the watermark past each hour once all of it is sent. A failed hour is sent again
-  whole, so what had landed of it lands twice. With no watermark (a first run, a lost state), it
-  starts at the last closed hour.
-- The health job alerts on the lake's four pipelines' dropped rows and on its two destinations'
-  `last_error`.
+Nothing waits on telemetry, and no failure of it reaches a caller.
+
+- **The platform hook** queues each event's row in its context's outbox
+  (`core/os/src/platform-hook.ts`): one send is out at a time, with every row that was waiting, up
+  to 4 MB. A send that fails loses its rows and is logged under its kind
+  (`telemetry.platform-failure-send`, `telemetry.deploy-reset-send`, or an issue); rows of a send
+  that is out when the context resets are lost and nothing says so. An event that finds 8 MB
+  already waiting is dropped and counted (`telemetry.events-dropped`).
+- **`apps/telemetry`** answers 503 when a send fails or the secret is wrong
+  (`telemetry.secret-refused`), so Cloudflare sends the batch again (it did through a 12-minute
+  outage) and rotating the secret loses nothing. A batch it cannot read at all is answered 400
+  (`telemetry.batch-unreadable`), since sending it again cannot help; a record that does not parse
+  is skipped and counted (`telemetry.records-skipped`). A batch sent twice lands twice: dedupe on
+  each table's key.
+- **A stream** accepts a row that breaks its schema and drops it silently, so tests check every row
+  against its schema, and the health job alerts on dropped rows.
+- **The metrics copy** runs after the job's pages are posted. It copies the closed hours after a
+  watermark in the job's state, 24 a run, and writes the watermark after each hour that is sent
+  whole. A failed hour is sent again whole, so what had landed of it lands twice (`metrics` has no
+  key). A point that does not parse is skipped and counted; an hour read short of its `count()` is
+  not sent. With no watermark (a first run, a lost state), it starts at the last closed hour.
+- **The alert check** (`scripts/monitors/telemetry.ts`) pages #error-pulse for: a rule over its
+  line, judged over the 70 minutes before each hourly run on the one Worker the lake's `envs.ts`
+  entry names (`alertRulesWorkerName`: main on dev, since every preview's tests wedge deliveries on
+  purpose); a row one of the lake's four pipelines dropped; a pipeline or destination that is
+  missing, stopped or failing. It does not see a sink that has stopped writing.
 
 ## Privacy
 
 Rows keep payloads and log bodies: messages, email bodies, model output. An invocation's row in
-`logs` keeps the whole URL, its query included, and the visitor's country, city, network and user
-agent; `spans` drops those. Deleting a project or a
+`logs` keeps the whole URL, its query included, the request headers Cloudflare exports, and the
+visitor's country, city, network and user agent; `spans` drops those. `core/os` is the OAuth
+issuer, so a query can carry a one-time code; `observability.redactQueryString` in the Worker's
+config would drop every query, from Workers Logs too. Deleting a project or a
 context does not reach the lake; until a purge job exists, its rows stay. The OTLP secret sits in
 plain text in the destination's config and can only append rows. Setup makes it once; to rotate it,
 delete it from Doppler and run setup again.
@@ -224,7 +247,9 @@ delete it from Doppler and run setup again.
 stream, sink and pipeline per table, the Worker's secret, and the two OTLP destinations. A stream's
 schema cannot change and a sink cannot adopt an existing table, so a column change is a new table
 (`logs_v2`) and a new stream, sink and pipeline; delete the old ones once drained (an account allows
-20 of each).
+20 of each). An existing sink is taken by its name, so a catalog token minted anew does not reach
+it: drop that table, its sink and its pipeline, and run setup again.
+`.depot/workflows/deploy-telemetry.yml` deploys the Worker when a push to main changes it.
 
 ## What it adds, and what it touches
 
@@ -245,24 +270,38 @@ prd):
 A `core/os` deployment takes part only when its `APP_CONFIG` names the lake's two bindings:
 `telemetry: { eventsStreamBinding, metricsDatasetBinding }`. Unset, the default, it has no lake:
 the platform hook returns before it builds a row, `metrics` writes nothing, and what is left is a
-`WORKER_NAME` var, `iterate.project_id` and `iterate.path` on each context's spans, and one number
+`WORKER_NAME` var, `iterate.project_id` and `iterate.path` on each context's spans, and two numbers
 kept per fan-out row. A name the Worker holds no binding under throws at its first request, naming
 the field: a lake that silently received nothing would look like a quiet day. For iterate's own
 deployments the config generator writes `telemetry`, with the bindings and the two destinations,
 for an `envs.ts` entry that names a lake (`telemetry:`); prd's names none, and a self-hosted
 deployment's config has none of it.
 
-Nothing waits on telemetry and no failure of it reaches a caller: the hook's send is never awaited
-and its rejection is logged, a refused metric point is dropped, and the OTLP export is Cloudflare's
-own, retried by Cloudflare while `apps/telemetry` is down. The cost on a taking-part deployment is
-the send itself: about 350 ms of I/O for each durable event, which keeps its invocation open that
-long.
+Where the code is: `apps/telemetry` (the receiver and the account's setup), `scripts/monitors`
+(the alerts and the copy), `apps/admin` (the page), and in core, `core/os` (the hook and its
+outbox, the delivery loop's three metrics, the span attributes, the config's key and bindings) and
+`core/lib` (`iterate/metrics`). To take it out of a deployment, drop `telemetry:` from its `envs.ts`
+entry and deploy; the account's resources are deleted by hand.
 
-The code, outside tests: `apps/telemetry` (609 lines: the receiver and the account's setup),
-`scripts/monitors` (415: alerts and the copy), `apps/admin` (264: the page), and in core 152 lines
-of `core/os` (the hook's row, the delivery loop's three metrics, the span attributes, the config's
-bindings) and 46 of `core/lib` (`iterate/metrics`). To take it out of a deployment, drop `telemetry:`
-from its `envs.ts` entry and deploy; the account's resources are deleted by hand.
+## What it costs
+
+Measured on the dev account on 2026-10-01, at list prices. One run of a preview's suites writes
+about 516,000 spans, 52,000 log rows and 16,000 events: 400 MB of JSON in, 28 MB stored. The dev
+account sees about 200 such runs a day, which sets the bill; prd writes a fortieth of that.
+
+| a month                                                        | dev, every preview exporting | prd, at today's volume |
+| -------------------------------------------------------------- | ---------------------------- | ---------------------- |
+| OTLP export, $0.05 per million past 10 M each of spans, logs   | $176                         | $4                     |
+| Pipelines, $0.06 a GB delivered and $0.04 a GB transformed     | $63–244                      | $0–2                   |
+| R2 storage, $0.015 a GB-month, growing while nothing is purged | $1, by a year $32            | under $1               |
+| the `telemetry` Worker, compaction, catalog operations         | under $20                    | under $1               |
+| Durable Object duration the hook's sends add                   | $12–51, before the outbox    | about $1               |
+| **the lake**                                                   | **about $270–460**           | **about $5–9**         |
+| traces persisted in Cloudflare, which a lake turns off         | $1,860 saved                 | $50 saved              |
+
+The Pipelines range is whether "uncompressed data delivered" is metered on the JSON sent or on what
+a sink writes; Cloudflare's page does not say. Half of a run's spans are a Durable Object's storage
+operations.
 
 ## Queries
 

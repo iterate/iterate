@@ -79,6 +79,13 @@ export const telemetryEnvs = {
     dopplerProject: "telemetry",
     workerName: "telemetry",
     baseUrl: "https://telemetry.iterate-dev-preview.workers.dev",
+    /** The ONE Worker whose metrics the health job's alert rules judge (scripts/monitors/telemetry.ts
+     *  ALERT_RULES, by `blob3`): main on dev, `osEnvs.preview.workerName`. Every PR preview's Worker
+     *  (`pr<N>-<sha>-os`) writes to the same dataset, and the e2e suites wedge, halt and replay
+     *  subscriptions on purpose (PR 3478's previews, 2026-10-01: `subscription.pending` reached
+     *  2,002 and a delivery waited 79 s): judged, a test would page #error-pulse. A prd lake names
+     *  `os-prd`. */
+    alertRulesWorkerName: "os",
     bucket: "iterate-telemetry",
     streams: {
       events: "3dad6126791a4641928ad2dca104a1d2",
@@ -87,7 +94,7 @@ export const telemetryEnvs = {
       metrics: "65559d6006ef4cd8aeaaa896063b72a2",
     },
   },
-  // TODO: prd, once the preview's lake is proven: `ensure-resources --env prd` prints its streams.
+  // prd has no lake yet: `ensure-resources --env prd` creates one and prints its streams.
 };
 
 export const osEnvs: Record<string, OsEnv> = {

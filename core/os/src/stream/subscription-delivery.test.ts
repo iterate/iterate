@@ -1980,12 +1980,68 @@ test("metrics: a fan-out ack is timed, a failure on the ladder counts a retry, a
   ]);
 });
 
-test("metrics: a fan-out row's burst is timed once, when the row catches up", async () => {
+test.for([
+  { name: "a burst is timed once, when the row catches up", pings: 20, timings: 1 },
+  {
+    name: "a burst that does not end is timed every hundred events, and once more when it does",
+    pings: 250,
+    timings: 3,
+  },
+])("metrics: a fan-out row's $name", async ({ pings, timings }) => {
   const rig = fanOutRig({});
-  rig.pings(...range(1, 20));
+  rig.pings(...range(1, pings));
   await drainDeliveries();
-  expect(rig.acked).toHaveLength(20);
-  expect(rig.measured.filter(({ name }) => name === "subscription.delivery_ms")).toHaveLength(1);
+  expect(rig.acked).toHaveLength(pings);
+  expect(rig.measured.filter(({ name }) => name === "subscription.delivery_ms")).toHaveLength(
+    timings,
+  );
+});
+
+// An event's age is not how long it waited: only an event committed after its row was is timed.
+test.for([
+  { name: "a cursor row", row: { name: "s", target: "itx.sink.push" } },
+  { name: "a fan-out row", row: { name: "f", target: "itx.sink.deliverEvent", ordered: false } },
+])(
+  "metrics: $name replaying the history it asked for times none of it, and times what lands after",
+  async ({ row }) => {
+    const delivered: number[] = [];
+    const take = (events: StreamEvent[]) => void delivered.push(...ns(events));
+    const rig = incarnation((printed) =>
+      printed === "itx.sink"
+        ? { push: take, deliverEvent: (event: StreamEvent) => take([event]) }
+        : undefined,
+    );
+    fakeClock();
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    vi.setSystemTime(Date.now() + 3_600_000); // the row is configured an hour after ping 1
+    configure(rig, { ...row, consumes: ["demo/ping"], afterOffset: 0 });
+    await drainDeliveries();
+    expect({ delivered, measured: rig.measured }).toEqual({ delivered: [1], measured: [] });
+    rig.stream.append({ type: "demo/ping", payload: { n: 2 } });
+    await drainDeliveries();
+    expect({ delivered, measured: rig.measured }).toMatchObject({
+      delivered: [1, 2],
+      measured: [{ kind: "timing", name: "subscription.delivery_ms", value: 0 }],
+    });
+  },
+);
+
+test("metrics: a fan-out call that delivered nothing, its row replaced while the target was evaluating, is not timed", async () => {
+  const evaluations: (() => void)[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? new Promise<void>((resolve) => evaluations.push(resolve)).then(() => ({
+          deliverEvent: () => {},
+        }))
+      : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] }); // over ping 1's evaluation
+  for (const answer of evaluations.splice(0)) answer();
+  await drainDeliveries();
+  expect(rig).toMatchObject({ measured: [] });
 });
 
 test("metrics: a cursor row's refused batch counts a retry, and its ack on the rung is timed from the batch's commit", async () => {

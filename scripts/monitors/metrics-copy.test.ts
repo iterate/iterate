@@ -36,39 +36,49 @@ test.for<{ name: string; copiedThrough: number | undefined; now: number; hours: 
   expect(hoursToCopy(copiedThrough, new Date(now * 1_000))).toEqual(hours);
 });
 
-test.for<{ name: string; point: Record<string, string | number>; row: MetricsRow }>([
+test.for<{ name: string; point: ReturnType<typeof point>; rows: MetricsRow[] }>([
   {
     name: "a point is a row as stored, its sample interval the weight",
     point: point({ project_id: "prj_a", path: "/agents/x", weight: 4 }),
-    row: {
-      time: "2026-09-30T12:00:07.000Z",
-      worker: "os-prd",
-      project_id: "prj_a",
-      path: "/agents/x",
-      name: "subscription.delivery_ms",
-      kind: "timing",
-      labels: "row=config",
-      value: 182.5,
-      weight: 4,
-    },
+    rows: [
+      {
+        time: "2026-09-30T12:00:07.000Z",
+        worker: "os-prd",
+        project_id: "prj_a",
+        path: "/agents/x",
+        name: "subscription.delivery_ms",
+        kind: "timing",
+        labels: "row=config",
+        value: 182.5,
+        weight: 4,
+      },
+    ],
   },
   {
     name: "a point of no context has a null project and path",
     point: point({ project_id: "", path: "" }),
-    row: {
-      time: "2026-09-30T12:00:07.000Z",
-      worker: "os-prd",
-      project_id: null,
-      path: null,
-      name: "subscription.delivery_ms",
-      kind: "timing",
-      labels: "row=config",
-      value: 182.5,
-      weight: 1,
-    },
+    rows: [
+      {
+        time: "2026-09-30T12:00:07.000Z",
+        worker: "os-prd",
+        project_id: null,
+        path: null,
+        name: "subscription.delivery_ms",
+        kind: "timing",
+        labels: "row=config",
+        value: 182.5,
+        weight: 1,
+      },
+    ],
   },
-])("$name", ({ point, row }) => {
-  expect(metricsRows([point])).toEqual([row]);
+  {
+    name: "a NaN value, which the SQL API answers as null, makes no row and holds nothing back",
+    point: point({ value: null }),
+    rows: [],
+  },
+])("$name", ({ point, rows }) => {
+  // exact: the row's every column, and no row more
+  expect(metricsRows([point])).toEqual(rows);
 });
 
 test("rows are sent in JSON array chunks under 5 MB, every row once, in order", () => {
@@ -83,7 +93,7 @@ test("rows are sent in JSON array chunks under 5 MB, every row once, in order", 
 });
 
 /** A raw point as the copy's Analytics Engine query answers it: a UInt32 `unix` and `weight`. */
-function point(fields: Record<string, string | number>) {
+function point(fields: Record<string, string | number | null>) {
   return {
     unix: H0 + 7,
     name: "subscription.delivery_ms",

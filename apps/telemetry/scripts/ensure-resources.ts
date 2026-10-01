@@ -10,6 +10,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { CLOUDFLARE_API, isNotRoutedYet, retryPlatformFailures } from "iterate/platform-retry";
 import { getEnv, telemetryEnvs } from "../../../envs.ts";
 import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
@@ -115,6 +116,16 @@ export default async function ensureResources(options: { env: string }) {
     if (columnsOf(stream.schema) !== columnsOf(schema))
       throw new Error(`${streamName}'s columns differ from schemas/${table}.json: add ${table}_v2`);
     found[table] = stream.id;
+    // A sink is taken by its name: the table it writes and the token it writes with are not
+    // compared with this account's. Cloudflare cannot change a sink
+    // (https://developers.cloudflare.com/pipelines/sinks/manage-sinks/#limitations), so a catalog
+    // token minted anew reaches only the sinks made after it, and the others write with the old
+    // one for as long as Cloudflare honours it. Moving a table's sink to the new token takes more
+    // than deleting its pipeline and sink and running this again: a sink cannot be made for a
+    // table that exists
+    // (https://developers.cloudflare.com/pipelines/sinks/available-sinks/r2-data-catalog/), so
+    // the table is dropped too, with its rows, or takes a new name as a column change does
+    // (docs/telemetry.md#setting-up-an-account).
     if (!sinks.some((candidate) => candidate.name === sinkName))
       await cf("/pipelines/v1/sinks", {
         method: "POST",
@@ -203,12 +214,18 @@ const columnsOf = (schema: StreamSchema) =>
 
 /** Whether a destination's create or update failed on a preflight a server answered before it
  *  learned the Worker: Cloudflare's own not-found for a workers.dev hostname it does not route yet
- *  (`isNotRoutedYet`), or the previous version's 503 to the secret it does not know yet. */
-function preflightMetAStaleServer(error: unknown) {
-  const preflight = /Pre-flight check failed: HTTP (\d+): (.*?)'?$/m.exec(String(error));
-  if (!preflight) return false;
-  const status = Number(preflight[1]);
-  return status === 503 || isNotRoutedYet({ status, headers: {}, body: preflight[2] });
+ *  (`isNotRoutedYet`), or the previous version's 503 to the secret it does not know yet. The API
+ *  refuses the write with the preflight's status and body in an error's `detail`:
+ *  `Pre-flight check failed: HTTP 404: error code: 1042\n`. */
+export function preflightMetAStaleServer(error: unknown) {
+  if (!(error instanceof CloudflareApiError)) return false;
+  const { data: errors = [] } = z.array(z.object({ detail: z.string() })).safeParse(error.details);
+  return errors.some(({ detail }) => {
+    const preflight = /^Pre-flight check failed: HTTP (\d+): (.*)$/s.exec(detail);
+    if (!preflight) return false;
+    const status = Number(preflight[1]);
+    return status === 503 || isNotRoutedYet({ status, headers: {}, body: preflight[2] });
+  });
 }
 
 /** `command` with `input` on its stdin: its output, which echoes the secret, goes nowhere. */

@@ -78,7 +78,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments                                                              |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
 | `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, Kit, SPA, dummy-petshop or ci-reports                                |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, Kit, SPA, dummy-petshop, ci-reports or telemetry                     |
 | `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse page per red signal                     |
@@ -602,8 +602,8 @@ pins the exceptions:
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 
-Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports posts its result to
-#ci from its last step.
+Each deploy is one job, and every app but SPA, dummy-petshop, ci-reports and telemetry posts its
+result to #ci from its last step.
 
 ## Preview job shape
 
@@ -834,12 +834,18 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
     48 hours: an incident that lasts longer is paged again, and the new page resolves the older
     one naming no one.
   - **telemetry** (`scripts/monitors/telemetry.ts`): on each account's telemetry lake, the alert
-    rules (one Analytics Engine query and a line each), the lake's pipelines' dropped rows over the
-    last hour and its two OTLP destinations' `last_error`. One page while any is red, naming each.
-  - **metrics copy** (`scripts/monitors/metrics-copy.ts`), not a signal: a run on main copies the
-    closed hours of Analytics Engine metrics after the state's watermark into the lake's `metrics`
-    table ([telemetry](telemetry.md)), oldest first and 24 at most, and moves the watermark past
-    each hour it sent whole; any other run prints what it would send.
+    rules (one Analytics Engine query and a line each, over the one Worker the lake's `envs.ts`
+    entry names, `alertRulesWorkerName`: a PR preview's metrics are its tests'), each of the lake's
+    four pipelines that is missing or not running, their dropped rows, and each of its two OTLP
+    destinations that is missing, disabled or failing (`last_error`). The rules and the dropped
+    rows look back 70 minutes, the job's interval and ten more. One page while any is red, naming
+    each.
+  - **metrics copy** (`scripts/monitors/metrics-copy.ts`), not a signal and the job's last step,
+    after the pages, the state and PostHog: a run on main copies the closed hours of Analytics
+    Engine metrics after the state's watermark into the lake's `metrics` table
+    ([telemetry](telemetry.md)), oldest first and 24 at most, and writes the state again with the
+    watermark past each hour as soon as that hour is sent whole; any other run prints what it would
+    send. An hour whose read came back short of its own count is not sent, and fails the job.
 
 What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 

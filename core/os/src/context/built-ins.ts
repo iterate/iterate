@@ -11,7 +11,6 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import type { Pipeline } from "cloudflare:pipelines";
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
@@ -58,7 +57,6 @@ import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
-import { deliverToPlatformHook } from "../platform-hook.ts";
 import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
 import {
   connectionPathOf,
@@ -414,8 +412,8 @@ export interface BuiltInScope extends LibraryRoots {
   workers: IterateContextApi["workers"];
   /** THE PLATFORM HOOK (platform-hook.ts): the platform's own subscriber, that a deployment's birth
    *  events point a fan-out row at (`itx.builtins.platformHook.deliverEvent`). `deliverEvent`
-   *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to the platform's
-   *  code with the bindings every built-in holds. Not in the published API: no one else calls it. */
+   *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to what the
+   *  context built for it (`telemetryEventsOutbox`). Not in the published API: no one else calls it. */
   platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
    *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
@@ -552,12 +550,11 @@ export interface BuildBuiltInsDeps {
     DB: D1Database;
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
     EMAIL?: SendEmail;
-    /** This Worker's name: every row the platform hook sends carries it. */
-    WORKER_NAME: string;
   };
-  /** The telemetry lake's `events` stream (app-config.ts `telemetryBindingsOf`), which the platform
-   *  hook sends every durable event to; unset where the deployment names no lake. */
-  telemetryEventsStream?: Pipeline;
+  /** This context's outbox to the telemetry lake's `events` stream (platform-hook.ts
+   *  `eventsOutbox`), which the platform hook hands every durable event; unset where the
+   *  deployment names no lake. */
+  telemetryEventsOutbox?: (event: StreamEvent) => void;
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
   /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
@@ -2044,11 +2041,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           "platformHook.deliverEvent",
           JSON.stringify(event),
         );
-        deliverToPlatformHook(
-          { eventsStream: deps.telemetryEventsStream, worker: env.WORKER_NAME },
-          projectId,
-          event,
-        );
+        deps.telemetryEventsOutbox?.(event);
       },
     },
     webhooks: {

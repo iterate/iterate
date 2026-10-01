@@ -22,13 +22,13 @@ const crash = {
   version: "ea4ed790-bb4e-4a0f-9c8f-30328336f811",
   trace_id: "f48ec96b8d15525c1dbf684f84247360",
 };
-/** The resource of oneLine's line and oneSpan's span. */
+/** The resource of `lines`' lines and `spans`' spans. */
 const resource = {
   attributes: [
     { key: "cloudflare.script_name", value: { stringValue: "telemetry-spike-producer" } },
   ],
 };
-/** oneSpan's span as a row. */
+/** A span of `spans` as a row. */
 const oneSpanRow = {
   ...producer,
   time: "2026-09-30T13:03:12.219Z",
@@ -279,7 +279,7 @@ test.for([
   {
     name: "a body's falsy values stay what they were",
     rows: logsOf(
-      oneLine({
+      lines({
         body: {
           kvlistValue: {
             values: [
@@ -302,21 +302,22 @@ test.for([
     ],
   },
   {
-    name: "a JSON column over 512 KB is cut there and keeps its whole size",
-    rows: logsOf(oneLine({ body: { stringValue: "x".repeat(600_000) } })),
+    name: "a JSON column over 512 KB is halved until it fits, whole characters only, and keeps its whole size",
+    // 300,002 UTF-16 units, whose half ends inside a pair
+    rows: logsOf(lines({ body: { stringValue: "😀".repeat(150_001) } })),
     expected: [
       {
         ...producer,
         time: "2026-09-30T13:03:12.219Z",
         level: "info",
-        body: "x".repeat(512 * 1024),
-        body_bytes: 600_000,
+        body: `${"😀".repeat(75_000)}\ufffd`,
+        body_bytes: 600_004,
       },
     ],
   },
   {
     name: "a line's time, severity and body left out are at OTLP's defaults",
-    rows: logsOf(oneLine({ timeUnixNano: undefined, severityNumber: undefined })),
+    rows: logsOf(lines({ timeUnixNano: undefined, severityNumber: undefined })),
     expected: [
       {
         ...producer,
@@ -329,7 +330,7 @@ test.for([
   },
   {
     name: "a span's kind left out is unspecified, and one past OTLP's kinds is its number",
-    rows: [...spansOf(oneSpan({})), ...spansOf(oneSpan({ kind: 9 }))],
+    rows: spansOf(spans({}, { kind: 9 })),
     expected: [
       { ...oneSpanRow, kind: "unspecified" },
       { ...oneSpanRow, kind: "9" },
@@ -340,13 +341,112 @@ test.for([
   expect(rows).toEqual(expected);
 });
 
+// A stream fails a whole send for one row over 1 MB (1,048,576 bytes) of JSON, where a control
+// character takes six bytes and a quote two. `json` is the row's bytes as a stream receives it.
+test.for([
+  {
+    name: "a body of control characters",
+    rows: logsOf(lines({ body: { stringValue: "\u0000".repeat(512 * 1024) } })),
+    expected: [{ kept: 65_536, whole: 524_288, json: 393_332 }],
+  },
+  {
+    name: "a body of quotes",
+    rows: logsOf(lines({ body: { stringValue: '"'.repeat(400_000) } })),
+    expected: [{ kept: 200_000, whole: 400_000, json: 400_116 }],
+  },
+  {
+    name: "an object body, whose JSON is escaped again inside the row's",
+    rows: logsOf(
+      lines({
+        body: {
+          kvlistValue: { values: [{ key: "said", value: { stringValue: '"'.repeat(300_000) } }] },
+        },
+      }),
+    ),
+    expected: [{ kept: 150_002, whole: 600_011, json: 300_114 }],
+  },
+  {
+    name: "an uncaught exception's megabyte of message and of stack",
+    rows: logsOf(
+      lines({
+        body: { stringValue: "m".repeat(1_000_000) },
+        attributes: exceptionAttributes("m".repeat(1_000_000), "\n".repeat(1_000_000)),
+      }),
+    ),
+    expected: [{ kept: 500_000, whole: 1_000_000, exception: 15_625, stack: 7_812, json: 531_392 }],
+  },
+  {
+    name: "a span's attributes and its exception event",
+    rows: spansOf(
+      spans({
+        attributes: [{ key: "windows.path", value: { stringValue: "\\".repeat(1_000_000) } }],
+        events: [{ name: "exception", attributes: exceptionAttributes('"'.repeat(1_000_000), "") }],
+      }),
+    ),
+    expected: [{ kept: 250_002, whole: 2_000_019, exception: 7_812, json: 515_861 }],
+  },
+])("$name is cut until its row fits a stream", ({ rows, expected }) => {
+  // exact: `json` is what the cut is for
+  expect(rows.map(sizes)).toEqual(expected);
+});
+
+test.for([
+  {
+    name: "a line whose time is no number is skipped, and the lines around it land",
+    batch: logRows(
+      OtlpLogs.parse(
+        lines(
+          { body: { stringValue: "before" } },
+          { timeUnixNano: "yesterday" },
+          { body: { stringValue: "after" } },
+        ),
+      ),
+    ),
+    expected: {
+      rows: [{ body: "before" }, { body: "after" }],
+      skipped: [expect.stringContaining("timeUnixNano")],
+    },
+  },
+  {
+    name: "a line whose time is past any date, and one that is no record, are skipped",
+    batch: logRows(OtlpLogs.parse(lines({ timeUnixNano: "9".repeat(21) }, "a line"))),
+    expected: { rows: [], skipped: [expect.stringContaining("timeUnixNano"), expect.any(String)] },
+  },
+  {
+    name: "a span with no name or no end is skipped, and the span beside it lands",
+    batch: spanRows(
+      OtlpTraces.parse(
+        spans({ name: undefined }, { spanId: "kept" }, { endTimeUnixNano: undefined }),
+      ),
+    ),
+    expected: {
+      rows: [{ span_id: "kept" }],
+      skipped: [expect.stringContaining("name"), expect.stringContaining("endTimeUnixNano")],
+    },
+  },
+  {
+    name: "a resource left out is no Worker's, and what OTLP JSON leaves out as empty is empty",
+    batch: logRows(
+      OtlpLogs.parse({ resourceLogs: [{ scopeLogs: [{ logRecords: [{}] }] }, { resource }, {}] }),
+    ),
+    expected: { rows: [], skipped: [] },
+  },
+  {
+    name: "a batch of nothing is no rows",
+    batch: spanRows(OtlpTraces.parse({})),
+    expected: { rows: [], skipped: [] },
+  },
+])("$name", ({ batch, expected }) => {
+  expect(batch).toMatchObject(expected);
+});
+
 test("every row of the fixtures and of OTLP's defaults fits its stream's schema", () => {
   const atDefaults = { timeUnixNano: undefined, severityNumber: undefined };
   expect({
-    logs: [...logsOf(logs), ...logsOf(oneLine(atDefaults))].flatMap((row) =>
+    logs: [...logsOf(logs), ...logsOf(lines(atDefaults))].flatMap((row) =>
       rowProblems(logsSchema, row),
     ),
-    spans: [...spansOf(traces), ...spansOf(oneSpan({}))].flatMap((row) =>
+    spans: [...spansOf(traces), ...spansOf(spans({}))].flatMap((row) =>
       rowProblems(spansSchema, row),
     ),
   }).toEqual({ logs: [], spans: [] });
@@ -367,35 +467,68 @@ test("a row that does not fit its stream's schema says why, column by column", (
 });
 
 function logsOf(payload: unknown) {
-  return logRows(OtlpLogs.parse(payload));
+  return logRows(OtlpLogs.parse(payload)).rows;
 }
 
 function spansOf(payload: unknown) {
-  return spanRows(OtlpTraces.parse(payload));
+  return spanRows(OtlpTraces.parse(payload)).rows;
 }
 
-/** One `console.log` line, as Cloudflare exports it, with `record`'s fields over its own. */
-function oneLine(record: object) {
-  const line = {
-    timeUnixNano: "1790773392219000000",
-    severityNumber: 9,
-    attributes: [{ key: "name", value: { stringValue: "log" } }],
-    ...record,
-  };
-  return { resourceLogs: [{ resource, scopeLogs: [{ logRecords: [line] }] }] };
+/** A batch of `console.log` lines, as Cloudflare exports them, each with a record's fields over
+ *  its own; a record that is no object goes in as it is. */
+function lines(...records: unknown[]) {
+  const logRecords = records.map((record) =>
+    record instanceof Object
+      ? {
+          timeUnixNano: "1790773392219000000",
+          severityNumber: 9,
+          attributes: [{ key: "name", value: { stringValue: "log" } }],
+          ...record,
+        }
+      : record,
+  );
+  return { resourceLogs: [{ resource, scopeLogs: [{ logRecords }] }] };
 }
 
-/** One span with no attributes, with `span`'s fields over its own. */
-function oneSpan(span: object) {
-  const own = {
+/** A batch of spans with no attributes, each with a span's fields over its own. */
+function spans(...records: object[]) {
+  const own = records.map((span) => ({
     traceId: "6856a5e381eb349528cb7f1a43d05802",
     spanId: "24ecca8e68383c93",
     name: "GET",
     startTimeUnixNano: "1790773392219000000",
     endTimeUnixNano: "1790773392219000000",
     ...span,
+  }));
+  return { resourceSpans: [{ resource, scopeSpans: [{ spans: own }] }] };
+}
+
+/** The attributes of an uncaught exception's log record, and of a span's exception event. */
+function exceptionAttributes(message: string, stack: string) {
+  return [
+    { key: "exception.type", value: { stringValue: "Error" } },
+    { key: "exception.message", value: { stringValue: message } },
+    { key: "exception.stacktrace", value: { stringValue: stack } },
+  ];
+}
+
+/** What a row's cut columns kept, in UTF-16 units, beside the whole size its JSON column reports
+ *  and the bytes of the row's own JSON. */
+function sizes(row: {
+  body?: string;
+  body_bytes?: number;
+  attributes?: string;
+  attributes_bytes?: number;
+  exception?: string;
+  stack?: string;
+}) {
+  return {
+    kept: (row.body || row.attributes)?.length,
+    whole: row.body_bytes ?? row.attributes_bytes,
+    exception: row.exception?.length,
+    stack: row.stack?.length,
+    json: new TextEncoder().encode(JSON.stringify(row)).byteLength,
   };
-  return { resourceSpans: [{ resource, scopeSpans: [{ spans: [own] }] }] };
 }
 
 /** The body of an `invocation` row: Cloudflare's record of one GET of the producer, whole. */

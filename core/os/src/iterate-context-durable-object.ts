@@ -94,7 +94,7 @@ import {
 } from "./context/paths.ts";
 import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
-import { telemetryBindingsOf } from "./platform-hook.ts";
+import { eventsOutbox, telemetryBindingsOf } from "./platform-hook.ts";
 import {
   appConfigOf,
   iterateAppScopesOf,
@@ -1095,7 +1095,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
-    telemetryEventsStream: this.#telemetry?.eventsStream,
+    telemetryEventsOutbox:
+      this.#telemetry &&
+      eventsOutbox({
+        eventsStream: this.#telemetry.eventsStream,
+        worker: this.env.WORKER_NAME,
+        projectId: this.#durableObjectAddress.projectId,
+      }),
     deployId: this.#appConfig.deployId,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,

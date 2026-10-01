@@ -1,6 +1,6 @@
 // The telemetry alerts' decisions: each rule against Analytics Engine rows as its SQL API writes
-// them, Pipelines' dropped rows and the destinations' status as Cloudflare answers them, and what
-// the findings owe the page. The calls themselves are proven against the dev account.
+// them, the lake's pipelines, their dropped rows and its destinations as Cloudflare answers them,
+// and what the findings owe the page. The calls themselves are proven against the dev account.
 import { expect, test } from "vitest";
 import {
   ALERT_RULES,
@@ -8,6 +8,7 @@ import {
   droppedRowFindings,
   evaluateRule,
   judgeTelemetry,
+  pipelineFindings,
   type AnalyticsEngineRow,
   type Finding,
 } from "./telemetry.ts";
@@ -29,8 +30,8 @@ test.for<{
     ],
     findings: [
       {
-        key: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config",
-        text: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config: 2,400",
+        key: "subscription.pending over 1,000 offsets behind at project_id=prj_a path=/agents/x labels=row=config",
+        text: "subscription.pending over 1,000 offsets behind at project_id=prj_a path=/agents/x labels=row=config: 2,400",
       },
     ],
   },
@@ -63,13 +64,59 @@ test.for<{
     rows: [{ project_id: "prj_a", path: "/", labels: "row=config", value: "1500" }],
     findings: [
       {
-        key: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config",
-        text: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config: 1,500",
+        key: "subscription.pending over 1,000 offsets behind at project_id=prj_a path=/ labels=row=config",
+        text: "subscription.pending over 1,000 offsets behind at project_id=prj_a path=/ labels=row=config: 1,500",
       },
     ],
   },
 ])("$name", ({ rule, rows, findings }) => {
   expect(evaluateRule(rule, rows)).toEqual(findings);
+});
+
+test("every rule judges the lake's one Worker alone: the dataset's others are previews under test", () => {
+  // exact: no rule lacks the filter
+  expect(ALERT_RULES.filter((rule) => !rule.sql.includes("blob3 = '{worker}'"))).toEqual([]);
+});
+
+test.for<{ name: string; pipelines: Parameters<typeof pipelineFindings>[0]; findings: Finding[] }>([
+  {
+    name: "the lake's four pipelines running is no finding, whatever the account's others do",
+    pipelines: [
+      pipeline("events"),
+      pipeline("logs"),
+      pipeline("spans"),
+      pipeline("metrics"),
+      pipeline("spike_logs", "failed"),
+    ],
+    findings: [],
+  },
+  {
+    name: "a pipeline the account does not list is a finding",
+    pipelines: [pipeline("events"), pipeline("spans"), pipeline("metrics")],
+    findings: [
+      {
+        key: "telemetry_logs_pipeline not running",
+        text: "telemetry_logs_pipeline not running: missing",
+      },
+    ],
+  },
+  {
+    name: "a pipeline in any status but running is a finding that says the status",
+    pipelines: [
+      pipeline("events"),
+      pipeline("logs"),
+      pipeline("spans", "failed"),
+      pipeline("metrics"),
+    ],
+    findings: [
+      {
+        key: "telemetry_spans_pipeline not running",
+        text: "telemetry_spans_pipeline not running: failed",
+      },
+    ],
+  },
+])("pipelines: $name", ({ pipelines, findings }) => {
+  expect(pipelineFindings(pipelines)).toEqual(findings);
 });
 
 test.for<{ name: string; groups: unknown[]; findings: Finding[] }>([
@@ -83,11 +130,11 @@ test.for<{ name: string; groups: unknown[]; findings: Finding[] }>([
     findings: [
       {
         key: "telemetry_metrics_pipeline dropped rows (deserialization/missing_field)",
-        text: "telemetry_metrics_pipeline dropped rows (deserialization/missing_field): 4 in the last hour",
+        text: "telemetry_metrics_pipeline dropped rows (deserialization/missing_field): 4 in the last 70 minutes",
       },
       {
         key: "telemetry_metrics_pipeline dropped rows (sink/write)",
-        text: "telemetry_metrics_pipeline dropped rows (sink/write): 4 in the last hour",
+        text: "telemetry_metrics_pipeline dropped rows (sink/write): 4 in the last 70 minutes",
       },
     ],
   },
@@ -105,15 +152,18 @@ test.for<{ name: string; groups: unknown[]; findings: Finding[] }>([
   expect(droppedRowFindings(data, pipelines)).toEqual(findings);
 });
 
-test.for<{ name: string; destination: Record<string, unknown>; findings: Finding[] }>([
+test.for<{ name: string; destinations: unknown[]; findings: Finding[] }>([
   {
-    name: "a destination whose last push succeeded is no finding",
-    destination: destination("telemetry-logs", ""),
+    name: "both destinations enabled, their last push a success, is no finding",
+    destinations: [destination("telemetry-traces"), destination("telemetry-logs")],
     findings: [],
   },
   {
     name: "a destination with a last_error is failing now",
-    destination: destination("telemetry-logs", "2026-09-30T13:16:09Z"),
+    destinations: [
+      destination("telemetry-traces"),
+      destination("telemetry-logs", { lastError: "2026-09-30T13:16:09Z" }),
+    ],
     findings: [
       {
         key: "OTLP destination telemetry-logs failing",
@@ -123,16 +173,46 @@ test.for<{ name: string; destination: Record<string, unknown>; findings: Finding
   },
   {
     name: "another destination on the account is not the lake's, failing or not",
-    destination: destination("telemetry-spike-traces", "2026-09-30T13:16:09Z"),
+    destinations: [
+      destination("telemetry-traces"),
+      destination("telemetry-logs"),
+      destination("telemetry-spike-traces", { lastError: "2026-09-30T13:16:09Z" }),
+    ],
     findings: [],
   },
   {
     name: "a destination with no status yet has not failed",
-    destination: { slug: "telemetry-traces", configuration: { type: "logpush" } },
+    destinations: [
+      { slug: "telemetry-traces", enabled: true, configuration: { type: "logpush" } },
+      destination("telemetry-logs"),
+    ],
     findings: [],
   },
-])("destinations: $name", ({ destination, findings }) => {
-  expect(destinationFindings([destination])).toEqual(findings);
+  {
+    name: "a disabled destination is a finding, whatever its last push",
+    destinations: [
+      destination("telemetry-traces", { enabled: false }),
+      destination("telemetry-logs"),
+    ],
+    findings: [
+      {
+        key: "OTLP destination telemetry-traces disabled",
+        text: "OTLP destination telemetry-traces disabled",
+      },
+    ],
+  },
+  {
+    name: "a destination the account does not list is a finding",
+    destinations: [destination("telemetry-traces")],
+    findings: [
+      {
+        key: "OTLP destination telemetry-logs missing",
+        text: "OTLP destination telemetry-logs missing",
+      },
+    ],
+  },
+])("destinations: $name", ({ destinations, findings }) => {
+  expect(destinationFindings(destinations)).toEqual(findings);
 });
 
 const red = { key: "preview: a over 1", text: "preview: a over 1: 5" };
@@ -193,6 +273,12 @@ test.for<{
   expect({ update: judged.update }).toMatchObject({ update });
 });
 
+/** One of the account's pipelines as its listing answers it, named as ensure-resources names a
+ *  table's. */
+function pipeline(table: string, status = "running") {
+  return { id: table, name: `telemetry_${table}_pipeline`, status };
+}
+
 /** One group of Pipelines' user errors as the GraphQL dataset answers it. */
 function group(dimensions: { pipelineId: string; errorFamily?: string; errorType?: string }) {
   return { count: 4, dimensions: { errorFamily: "sink", errorType: "write", ...dimensions } };
@@ -200,10 +286,11 @@ function group(dimensions: { pipelineId: string; errorFamily?: string; errorType
 
 /** One destination as the list answers it, recorded on the dev account 2026-09-30, its headers'
  *  secret replaced. */
-function destination(slug: string, lastError: string) {
+function destination(slug: string, fields: { enabled?: boolean; lastError?: string } = {}) {
+  const { enabled = true, lastError = "" } = fields;
   return {
     slug,
-    enabled: true,
+    enabled,
     configuration: {
       type: "logpush",
       headers: { "x-telemetry-secret": "redacted" },

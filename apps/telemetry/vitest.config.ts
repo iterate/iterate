@@ -5,7 +5,7 @@ import { vitestReporters } from "../../packages/shared/src/test-support/e2e-poli
 export default defineConfig({
   test: {
     reporters: vitestReporters,
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     restoreMocks: true,
     unstubGlobals: true,
     unstubEnvs: true,

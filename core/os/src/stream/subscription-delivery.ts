@@ -180,9 +180,10 @@ type FanOutRow = {
   waitingForRoom: boolean;
   /** Admission alternates a due record and a new event, so neither starves the other. */
   preferRetry: boolean;
-  /** The longest wait, commit to answer, of an event answered since the row last had no call out:
-   *  its one `subscription.delivery_ms` once it has none. */
-  longestWaitMs: number | undefined;
+  /** The events delivered since the row's last `subscription.delivery_ms`, and the longest wait
+   *  among them, commit to answer: what its next one says (`#startFanOutCall`). */
+  deliveredSinceTiming: number;
+  longestWaitMs: number;
 };
 
 /** One fan-out call the pump starts: the event, the in-flight room it holds, and its attempt. */
@@ -1265,9 +1266,17 @@ export class SubscriptionDelivery {
               },
               persist,
             );
-            // one timing per batch: its oldest event's wait, from its commit to this ack
-            const waitedMs = Date.now() - Date.parse(events[0].createdAt);
-            this.#metrics.time("subscription.delivery_ms", waitedMs, `row=${name}`);
+            // One timing per batch: its oldest event's wait, from its commit to this ack. An event
+            // committed before its row was is the history the row asked for (`afterOffset`): it
+            // waited on no one, and its age is no latency. An event a halted row owed waited, and
+            // is timed.
+            const oldest = events.find((event) => event.offset > row.configuredAtOffset);
+            if (oldest)
+              this.#metrics.time(
+                "subscription.delivery_ms",
+                Date.now() - Date.parse(oldest.createdAt),
+                `row=${name}`,
+              );
           } catch (error) {
             if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue; // the old row's failure
             // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
@@ -1392,7 +1401,8 @@ export class SubscriptionDelivery {
       pumpAgain: false,
       waitingForRoom: false,
       preferRetry: false,
-      longestWaitMs: undefined,
+      deliveredSinceTiming: 0,
+      longestWaitMs: 0,
     };
     return record.fanOut;
   }
@@ -1638,33 +1648,42 @@ export class SubscriptionDelivery {
   #startFanOutCall(name: string, row: Subscription, fanOut: FanOutRow, call: FanOutCall): void {
     const { offset } = call.event;
     let settled = false;
+    /** Whether the target was handed the event: a row replaced while its target was evaluated
+     *  hands it nothing. */
     const operation = (async () => {
       const { deliverEvent } = await this.#evaluateTargetHeadForRow(name, row);
-      if (this.#isStillTheRow(name, row))
-        await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
+      if (!this.#isStillTheRow(name, row)) return false;
+      await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
+      return true;
     })();
     // Registered before the watchdog's race, so it runs first: an outcome sees `settled` true.
-    const onSettled = (answered: boolean) => {
+    const onSettled = (delivered: boolean) => {
       settled = true;
       fanOut.slots.delete(offset);
       fanOut.overdue.delete(offset);
       this.#deliveryCharsInFlight.release(call.chars);
-      if (answered && !isWake(call.event))
+      // a wait is of an event committed after its row was, as a cursor batch's is (`#drainCursor`)
+      if (delivered && !isWake(call.event) && offset > row.configuredAtOffset) {
+        fanOut.deliveredSinceTiming++;
         fanOut.longestWaitMs = Math.max(
-          fanOut.longestWaitMs ?? 0,
+          fanOut.longestWaitMs,
           Date.now() - Date.parse(call.event.createdAt),
         );
+      }
       this.#pumpFanOut(name);
-      // ONE TIMING each time the row catches up, never one per event: its longest wait since.
-      if (fanOut.slots.size === 0 && fanOut.longestWaitMs !== undefined) {
+      // ONE TIMING FOR A BURST, never one per event: the longest wait of the burst, written when
+      // the row has caught up, or of each hundred events of a burst that does not end, so a row
+      // under load it never catches up with is timed too.
+      if (
+        fanOut.deliveredSinceTiming >= 100 ||
+        (fanOut.deliveredSinceTiming > 0 && fanOut.slots.size === 0)
+      ) {
         this.#metrics.time("subscription.delivery_ms", fanOut.longestWaitMs, `row=${name}`);
-        fanOut.longestWaitMs = undefined;
+        fanOut.deliveredSinceTiming = 0;
+        fanOut.longestWaitMs = 0;
       }
     };
-    operation.then(
-      () => onSettled(true),
-      () => onSettled(false),
-    );
+    operation.then(onSettled, () => onSettled(false));
     const outcome = withTimeout(
       operation,
       CURSOR_DELIVERY_CALL_WATCHDOG_MS,

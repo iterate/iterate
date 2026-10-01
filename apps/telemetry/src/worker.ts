@@ -3,6 +3,11 @@
  * posts every exporting Worker's logs to /v1/logs and spans to /v1/traces, with the shared secret in
  * `x-telemetry-secret` (set on the destination by scripts/ensure-resources.ts); this Worker flattens
  * them into rows (otlp.ts) and sends those to the `logs` and `spans` streams.
+ *
+ * Cloudflare sends a batch again when it is answered 5xx, so 5xx is only for what another delivery
+ * can mend: a secret this version does not hold yet, and a send that failed. What the batch's own
+ * bytes decide, no delivery changes: a batch that cannot be read is answered 400, and one that can
+ * is answered 200 with the records that do not parse skipped. Each is logged, once a batch.
  */
 import type { Pipeline } from "cloudflare:pipelines";
 import {
@@ -17,25 +22,47 @@ import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request: Request, env) {
     const { pathname } = new URL(request.url);
     if (request.method !== "POST" || (pathname !== "/v1/logs" && pathname !== "/v1/traces"))
       return new Response(
         "apps/telemetry: Cloudflare's OTLP export posts to /v1/logs and /v1/traces (docs/telemetry.md)\n",
         { status: pathname === "/" ? 200 : 404 },
       );
-    // 503, not 401: Cloudflare sends the batch again, so rotating the secret loses nothing.
-    if (!secretMatches(request.headers.get("x-telemetry-secret"), env.TELEMETRY_OTLP_SECRET))
+    // 503, not 401: Cloudflare sends the batch again, so rotating the secret loses nothing. The
+    // line is all that shows of a rotation that left the destination and the Worker apart.
+    if (!secretMatches(request.headers.get("x-telemetry-secret"), env.TELEMETRY_OTLP_SECRET)) {
+      console.warn({ event: "telemetry.secret-refused", pathname });
       return new Response(null, { status: 503 });
+    }
     const body =
       request.headers.get("content-encoding") === "gzip"
         ? request.body?.pipeThrough(new DecompressionStream("gzip"))
         : request.body;
-    const payload = await new Response(body).json();
-    const { rows, stream } =
-      pathname === "/v1/logs"
-        ? { rows: logRows(OtlpLogs.parse(payload)), stream: env.LOGS }
-        : { rows: spanRows(OtlpTraces.parse(payload)), stream: env.SPANS };
+    // From its bytes to its rows a batch meets nothing but itself, so one that fails here (its
+    // gzip, its JSON, its shape down to the records) fails the same on every delivery: 400.
+    const batch = await new Response(body)
+      .json()
+      .then((payload) =>
+        pathname === "/v1/logs"
+          ? logRows(OtlpLogs.parse(payload))
+          : spanRows(OtlpTraces.parse(payload)),
+      )
+      .catch((error: unknown) => {
+        const message = String(error).slice(0, 1000);
+        console.warn({ event: "telemetry.batch-unreadable", pathname, message });
+      });
+    if (!batch) return new Response(null, { status: 400 });
+    const { rows, skipped } = batch;
+    if (skipped.length > 0)
+      console.warn({
+        event: "telemetry.records-skipped",
+        pathname,
+        skipped: skipped.length,
+        landed: rows.length,
+        first: skipped[0],
+      });
+    const stream = pathname === "/v1/logs" ? env.LOGS : env.SPANS;
     try {
       for (const chunk of sends(rows)) await stream.send(chunk);
     } catch (error) {
@@ -49,17 +76,18 @@ export default {
     }
     return Response.json({});
   },
-} satisfies ExportedHandler<{ TELEMETRY_OTLP_SECRET: string; LOGS: Pipeline; SPANS: Pipeline }>;
+} satisfies ExportedHandler<{ TELEMETRY_OTLP_SECRET?: string; LOGS: Pipeline; SPANS: Pipeline }>;
 
 /** Whether the header carries the secret, compared in time that does not depend on where the two
  *  differ: every byte, no early exit. A loop, not Workers' `crypto.subtle.timingSafeEqual`, which
- *  the DOM lib in tsconfig.app.json types away. */
-function secretMatches(given: string | null, secret: string) {
+ *  the DOM lib in tsconfig.app.json types away. A Worker deployed without its secret holds none,
+ *  which nothing matches: no header would otherwise equal it. */
+function secretMatches(given: string | null, secret: string | undefined) {
   const encoder = new TextEncoder();
-  const [a, b] = [encoder.encode(given || ""), encoder.encode(secret)];
+  const [a, b] = [encoder.encode(given || ""), encoder.encode(secret || "")];
   let difference = a.byteLength ^ b.byteLength;
   for (let i = 0; i < b.byteLength; i++) difference |= (a[i] ?? 0) ^ b[i]!;
-  return difference === 0;
+  return b.byteLength > 0 && difference === 0;
 }
 
 /** `rows` in sends of at most SEND_MAX_BYTES of JSON. */

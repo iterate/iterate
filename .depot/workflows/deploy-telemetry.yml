@@ -1,0 +1,37 @@
+# The telemetry lake's OTLP receiver (apps/telemetry, docs/telemetry.md), on the one account with a
+# lake: dev/preview (envs.ts `telemetryEnvs`). Doppler telemetry/preview supplies its Cloudflare
+# credentials and the OTLP secret it ships with. The lake itself (streams, sinks, the two OTLP
+# destinations) is `ensure-resources`'s, which a person runs.
+name: Deploy telemetry
+permissions:
+  contents: read
+concurrency:
+  group: deploy-telemetry-production
+  cancel-in-progress: false
+on:
+  push:
+    branches: [main]
+    paths:
+      - .depot/workflows/deploy-telemetry.yml
+      - apps/telemetry/**
+      - core/lib/**
+      - envs.ts
+      - scripts/lib/**
+      - pnpm-lock.yaml
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      # The deploy script ends by smoking the Worker's index.
+      - name: Deploy apps/telemetry
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm --dir apps/telemetry run-script deploy --env preview
