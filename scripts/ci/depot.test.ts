@@ -1,8 +1,13 @@
 // depot.test.ts — the state a job hands its next run: which run's artifact `newestArtifactFile`
 // reads. Depot's API client itself is packages/shared/src/depot-api.test.ts's.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { fakeDepot } from "../monitors/fake-depot.ts";
-import { newestArtifactFile } from "./depot.ts";
+import {
+  newestArtifactFile,
+  settledWorkflows,
+  workflowsInProgress,
+  type DepotApi,
+} from "./depot.ts";
 
 const state = { workflow: "Health", artifact: "health-state", file: "state.json" };
 
@@ -65,4 +70,25 @@ test("a state artifact without its file fails, naming the run", async () => {
   await expect(newestArtifactFile(depot, state)).rejects.toThrow(
     "health-state of wf-broken holds no state.json",
   );
+});
+
+// After the move, preview cleanup must see iterate/private's runs in progress, or it deletes the
+// deployments they test; the archive's are frozen.
+test("Depot's listings are of the repository CI runs in", async () => {
+  vi.stubEnv("GITHUB_REPOSITORY", "iterate/private");
+  const asked: object[] = [];
+  const depot: DepotApi = async (method, body) => {
+    asked.push({ method, ...body });
+    return { workflows: [] };
+  };
+
+  await workflowsInProgress(depot, { name: "Main OS e2e" });
+  await settledWorkflows(depot, { name: "Main OS e2e", triggers: ["push"] });
+  await newestArtifactFile(depot, state);
+
+  expect(asked).toMatchObject([
+    { method: "ListWorkflows", repo: "iterate/private", name: "Main OS e2e" },
+    { method: "ListWorkflows", repo: "iterate/private", name: "Main OS e2e" },
+    { method: "ListWorkflows", repo: "iterate/private", name: "Health" },
+  ]);
 });

@@ -908,9 +908,10 @@ minutes (`LINES` in the script). The page names the job that finished last on mo
 A report link means the report is available, not that the suite passed: the reports upload even
 after test failures. Links use Depot artifact UUIDs and expire
 with them. The workflows ask for 30 days, but Depot keeps artifacts about a
-week ([test evidence](test-evidence.md) keeps them in R2). Anyone can open an artifact whose name
-starts with `public-` at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
-([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
+week ([test evidence](test-evidence.md) keeps them in R2). Anyone Cloudflare Access lets in can
+open an artifact whose name starts with `public-` at
+`https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
+([CI traces](./ci-traces.md#the-viewer)), so upload only what iterate's own people may read.
 
 Each Browser specs shard prints Playwright's report of its share into its job log, and uploads its
 artifacts even when the suite fails:

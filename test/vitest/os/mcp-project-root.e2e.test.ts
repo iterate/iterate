@@ -39,7 +39,17 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     return result.structuredContent.result;
   };
 
-  const files = await success('async (itx) => itx.repos.get("/repos/config").listFiles()');
+  // every script of the example the instructions link, sent as its source, as a client copies it
+  const examples = await import(
+    new URL("../../../core/os/examples/mcp-run-scripts.mjs", import.meta.url).href
+  );
+  expect(Object.keys(examples).sort()).toEqual([
+    "appendNoteAndRemember",
+    "listConfigFiles",
+    "publishSite",
+    "readPackageJson",
+  ]);
+  const files = await success(String(examples.listConfigFiles));
   expect(files.paths).toContain("worker.ts");
   const discovery = await request("tools/list", {});
   const description = discovery.tools[0].description;
@@ -50,14 +60,14 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   });
   expect(initialized.instructions).toContain(description);
   expect(description).toContain(
-    "https://raw.githubusercontent.com/iterate/iterate/main/test/vitest/os/mcp-project-root.e2e.test.ts",
+    "https://raw.githubusercontent.com/iterate/core/main/core/os/examples/mcp-run-scripts.mjs",
   );
   // Execute all examples exactly as a client copies them, in this isolated test project.
-  const examples = [...description.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) =>
+  const inline = [...description.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) =>
     JSON.parse(match[1]),
   );
-  expect(examples).toHaveLength(4);
-  const [starter, readWorker, editWorker, commitNote] = examples;
+  expect(inline).toHaveLength(4);
+  const [starter, readWorker, editWorker, commitNote] = inline;
   const started = await request("tools/call", { name: "run", arguments: starter });
   expect(started, JSON.stringify(started)).toMatchObject({
     isError: false,
@@ -95,14 +105,8 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     structuredContent: { result: { commitOid: expect.any(String) } },
   });
   expect(await root.repos.get("/repos/config").readFile("notes.txt")).toBe("Hello from MCP");
-  expect(
-    await success('async (itx) => itx.repos.get("/repos/config").readFile("package.json")'),
-  ).toContain('"main": "worker.ts"');
-  expect(
-    await success(
-      'async (itx) => { await itx.cd("/notes/mcp").append({ type: "note", payload: { ok: true } }); await itx.kv.put("mcp", "root"); return itx.kv.get("mcp"); }',
-    ),
-  ).toBe("root");
+  expect(await success(String(examples.readPackageJson))).toContain('"main": "worker.ts"');
+  expect(await success(String(examples.appendNoteAndRemember))).toBe("root");
   // what the script wrote is for the person who asked for the run, through their grant; the
   // script itself called as the project's code
   expect((await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")).toMatchObject({
@@ -119,20 +123,14 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     (await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")?.source,
   ).not.toHaveProperty("principal");
 
-  const changes = [
-    { path: "app/page.js", content: 'export const html = "<h1>MCP config repo publication</h1>";' },
-    {
-      path: "worker.ts",
-      content:
-        'import { IterateConfigEntrypoint } from "iterate/sdk"; import { html } from "./app/page.js"; export default class extends IterateConfigEntrypoint { fetch() { return new Response(html, { headers: { "content-type": "text/html" } }); } }',
-    },
-  ];
   // the commit, and its outcome awaited as the instructions teach: once it is published, the site
   // serves the commit
-  const commit = await success(
-    `async (itx) => { const { commitOid } = await itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); const outcome = await itx.waitForEvent({ type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"], payload: { commitOid }, afterOffset: 0, timeoutMs: 120000 }); if (outcome.type.endsWith("worker-update-failed")) throw new Error(outcome.payload.error); return outcome.payload; }`,
-  );
-  expect(commit).toMatchObject({ commitOid: expect.any(String), generation: expect.any(Number) });
+  const commit = await success(String(examples.publishSite));
+  expect(commit).toMatchObject({
+    commitOid: expect.any(String),
+    generation: expect.any(Number),
+    projectUrl: expect.any(String),
+  });
   // the script named no author: the commit is the person's who asked for the run, committed by the
   // platform, and names the run
   expect(
@@ -142,10 +140,13 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   ).toMatchObject({
     author: { name: member.email, email: member.email },
     committer: { name: "iterate", email: "config@iterate.com" },
-    message: expect.stringMatching(/^MCP root regression\n\nIterate-Run: \/@\d+$/),
+    // the example's `Via:` trailer, and the run's beside it
+    message: expect.stringMatching(
+      /^Serve the page from a module of its own\n\nVia: Claude Code\nIterate-Run: \/@\d+$/,
+    ),
   });
   const published = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
-  expect(published).toMatchObject({ status: 200, text: "<h1>MCP config repo publication</h1>" });
+  expect(published).toMatchObject({ status: 200, text: "<h1>Published over MCP</h1>" });
   expect(published.headers["content-type"]).toContain("text/html");
   const events = await readAll(root);
   expect(

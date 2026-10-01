@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { Octokit } from "@octokit/rest";
+import { z } from "zod";
 
 import { CI_HTTP, retryPlatformFailures, type FailureKind } from "iterate/platform-retry";
 
@@ -80,16 +82,81 @@ function githubFailureFields(error: unknown) {
 const githubHttpError = (error: Error) =>
   error as Error & { status: number; response?: { headers: Record<string, string | undefined> } };
 
+/**
+ * This repository on GitHub: GITHUB_REPOSITORY in CI (Depot sets it as GitHub Actions does), else
+ * the checkout's `origin`, for a script run on a laptop. iterate/iterate today and iterate/private
+ * after the move, so no script names it: Depot's listings, GitHub's API and the Copybara copies ask
+ * here.
+ */
 export function getRepo() {
-  const repository = process.env.GITHUB_REPOSITORY;
-  if (!repository) {
-    throw new Error("GITHUB_REPOSITORY is required");
-  }
-  const [owner, repo] = repository.split("/");
-  if (!owner || !repo) {
+  const repository = process.env.GITHUB_REPOSITORY || checkoutOrigin();
+  const [owner, repo, ...rest] = repository.split("/");
+  if (!owner || !repo || rest.length > 0) {
     throw new Error(`Invalid GITHUB_REPOSITORY: ${repository}`);
   }
   return { owner, repo };
+}
+
+/** getRepo as Depot names a repository, `owner/name`. */
+export function githubRepository() {
+  const { owner, repo } = getRepo();
+  return `${owner}/${repo}`;
+}
+
+/**
+ * `path` at commit `sha` of this repository, or undefined when GitHub has neither (a pull request's
+ * test merge commit is dropped once a newer push replaces it). Through the API with the job's token:
+ * a private repository's raw.githubusercontent.com answers 404 to anyone without one.
+ */
+export async function fileAtCommit(octokit: Octokit, input: { sha: string; path: string }) {
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      ...getRepo(),
+      path: input.path,
+      ref: input.sha,
+      mediaType: { format: "raw" },
+    });
+    // the raw media type answers with the file itself, which Octokit reads as text
+    return z.string().parse(data);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "HttpError" &&
+      githubHttpError(error).status === 404
+    )
+      return undefined;
+    throw error;
+  }
+}
+
+/** Whether `sha` is a commit of this repository: GitHub answers 422, "No commit found", when not. */
+export async function hasCommit(octokit: Octokit, sha: string) {
+  try {
+    await octokit.rest.repos.getCommit({ ...getRepo(), ref: sha });
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "HttpError" &&
+      githubHttpError(error).status === 422
+    )
+      return false;
+    throw error;
+  }
+}
+
+let origin: string | undefined;
+/** The `owner/name` of this checkout's `origin` on GitHub, read once. */
+function checkoutOrigin() {
+  if (origin) return origin;
+  const url = execFileSync("git", ["remote", "get-url", "origin"], {
+    cwd: import.meta.dirname,
+    encoding: "utf8",
+  }).trim();
+  const repository = /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1];
+  if (!repository) throw new Error(`origin is not a GitHub repository: ${url}`);
+  origin = repository;
+  return origin;
 }
 
 /** The subset of GitHub webhook event payload fields our CI scripts read. */

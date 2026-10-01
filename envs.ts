@@ -386,19 +386,27 @@ export const dummyPetshopEnvs: Record<string, DummyPetshopEnv> = {
 };
 
 /** apps/ci-reports — the viewer for CI traces and Playwright HTML reports (docs/ci-traces.md): a plain
- *  Worker serving public Depot artifacts. CI tooling, so it lives on the dev/preview account with CI's
- *  Doppler config (_shared/preview supplies both the Cloudflare and the Depot token): its workers.dev
- *  origin, no routes, no DNS. The env is named for its use, not its Doppler config: deploy with
- *  `--env ci`. */
+ *  Worker serving public Depot artifacts, behind Cloudflare Access. CI tooling, so it lives on the
+ *  dev/preview account with CI's Doppler config (_shared/preview supplies both the Cloudflare and the
+ *  Depot token): its workers.dev origin, no routes, no DNS. The env is named for its use, not its
+ *  Doppler config: deploy with `--env ci`. `accessTeamDomain` is the account's Zero Trust team,
+ *  where Access signs a visitor in. */
 export const ciReportsEnvs: Record<
   string,
-  { cloudflareAccountId: string; dopplerConfig: string; workerName: string; baseUrl: string }
+  {
+    cloudflareAccountId: string;
+    dopplerConfig: string;
+    workerName: string;
+    baseUrl: string;
+    accessTeamDomain: string;
+  }
 > = {
   ci: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
     workerName: "ci-reports",
     baseUrl: "https://ci-reports.iterate-dev-preview.workers.dev",
+    accessTeamDomain: "iterate-dev-preview.cloudflareaccess.com",
   },
 };
 

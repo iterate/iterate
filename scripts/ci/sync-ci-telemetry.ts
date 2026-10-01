@@ -31,11 +31,10 @@ import { z } from "zod";
 import { DEPOT_ORG } from "@iterate-com/shared/depot-api";
 import { osEnvs } from "../../envs.ts";
 import { depotApi, mapConcurrent } from "./depot.ts";
-import { createOctokit } from "./github.ts";
+import { createOctokit, fileAtCommit, getRepo, githubRepository } from "./github.ts";
 import { durationMs, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { testEvidenceJobs, testEvidenceUploadedPrefix } from "./test-evidence.ts";
 
-const repository = "iterate/iterate";
 /** Room for a Depot record that becomes visible after the finish time it carries. */
 const settleMs = 5 * 60_000;
 /** Candidates are workflows created up to this long before the window: every workflow that runs on
@@ -86,16 +85,14 @@ export default async function syncCiTelemetry(
       WorkflowDetail.parse(await depot("GetWorkflow", { workflowId: workflow.workflowId })),
   );
 
-  const [owner, repo] = repository.split("/") as [string, string];
   const octokit = createOctokit(githubToken);
   const github = {
     pullRequest: async (number: number) =>
-      (await octokit.rest.pulls.get({ owner, repo, pull_number: number })).data,
+      (await octokit.rest.pulls.get({ ...getRepo(), pull_number: number })).data,
     pullRequestsForCommit: async (sha: string) =>
       (
         await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
-          owner,
-          repo,
+          ...getRepo(),
           commit_sha: sha,
         })
       ).data,
@@ -115,15 +112,10 @@ export default async function syncCiTelemetry(
   const runners = new Map(
     await mapConcurrent(workflowFiles, 8, async (file) => {
       const [sha, path] = file.split(":") as [string, string];
-      const response = await fetch(
-        `https://raw.githubusercontent.com/${repository}/${sha}/.depot/workflows/${path}`,
-        { signal: AbortSignal.timeout(30_000) },
-      );
+      const source = await fileAtCommit(octokit, { sha, path: `.depot/workflows/${path}` });
       // A pull request's test-merge commit is dropped once a newer push replaces it; its runs then
       // report no runner size rather than one read from another commit.
-      if (response.status === 404) return [file, new Map<string, string>()] as const;
-      if (!response.ok) throw new Error(`${path}@${sha}: HTTP ${response.status}`);
-      return [file, workflowRunners(await response.text())] as const;
+      return [file, source ? workflowRunners(source) : new Map<string, string>()] as const;
     }),
   );
 
@@ -180,7 +172,7 @@ export function ciTelemetryEvents(input: {
     workflow: { workflowId: string; workflowPath: string; name?: string },
   ) => ({
     schema_version: 3,
-    repository,
+    repository: githubRepository(),
     workflow_name: workflow.name,
     workflow_path: workflow.workflowPath || undefined,
     workflow_id: workflow.workflowId,
@@ -381,7 +373,7 @@ async function scheduledWindow(
   );
   const { workflows } = WorkflowList.parse(
     await depot("ListWorkflows", {
-      repo: repository,
+      repo: githubRepository(),
       name: self.workflowName,
       status: ["finished"],
       pageSize: 50,
@@ -445,7 +437,7 @@ export async function candidateRuns(
     8,
     async (filter: { name?: string; status?: string[] }) => {
       const { workflows } = WorkflowList.parse(
-        await depot("ListWorkflows", { repo: repository, pageSize: 200, ...filter }),
+        await depot("ListWorkflows", { repo: githubRepository(), pageSize: 200, ...filter }),
       );
       return { listing: filter.name || filter.status?.[0], workflows };
     },

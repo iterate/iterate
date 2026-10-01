@@ -2,17 +2,20 @@
 // (copybara/copy.bara.sky, tasks/complete/2026-10-01-core-public-copy.md).
 //
 //   node scripts/ci/copybara.ts sync --sha <deployed sha>
-//   node scripts/ci/copybara.ts check --sha <commit>
+//   node scripts/ci/copybara.ts check
 //   node scripts/ci/copybara.ts workspace-files [--check]
 //
-// `sync` (Deploy OS, after a production deploy) copies iterate/iterate's commits up to the deployed
+// `sync` (Deploy OS, after a production deploy) copies this repository's commits up to the deployed
 // one into each copy's main, then checks each copy holds exactly that commit's files, and that a
-// fresh clone of iterate/core passes the self-host recipe. An empty copy (its first run) starts as
-// one snapshot of that commit. It pushes as the iterate GitHub App, with a token that can only write
-// the two copies.
+// fresh clone of iterate/core passes the self-host recipe. It pushes as the iterate GitHub App, with
+// a token for the two copies and this repository, which it reads them from (getRepo: iterate/iterate,
+// then iterate/private). A copy that is empty, or whose last copied commit this repository doesn't
+// have (iterate/private starts with a fresh history), starts again from one snapshot of that commit.
 //
 // `check` (a pull request's check, .depot/workflows/copybara.yml) writes what iterate/core would hold
-// at a commit into a folder, pushing nothing, and runs the self-host recipe against it.
+// at this checkout's HEAD into a folder, pushing nothing, and runs the self-host recipe against it.
+//
+// Each run reads a copy of copy.bara.sky with its ORIGIN and PULL_REQUESTS set (`configFor`).
 //
 // `workspace-files` writes iterate/core's pnpm-workspace.yaml and pnpm-lock.yaml (copybara/core/).
 //
@@ -30,10 +33,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml, parseDocument, YAMLMap } from "yaml";
 import { z } from "zod";
+import { createOctokit, getRepo, hasCommit } from "./github.ts";
 import { iterateAppFromPrd, iterateAppToken } from "./iterate-app-token.ts";
 
 const COPYBARA = {
@@ -57,17 +62,26 @@ export async function sync(options: {
   /** The deployed commit to copy up to. */
   sha: string;
 }) {
+  const source = getRepo();
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),
     owner: "iterate",
-    // Copybara's fetch from iterate/iterate gets this token too. It can't read iterate/iterate,
-    // which is fine while that repo is public; a private source repo has to be listed here.
-    repositories: COPIES,
+    // Copybara's fetch from this repository gets the token too: the App is installed on every
+    // repository in the org, so it reads iterate/private as it does iterate/iterate. One token for
+    // both, as git's credential store holds one per host; Copybara never pushes to its origin.
+    repositories: [...COPIES, source.repo],
     permissions: { contents: "write" },
   });
   console.log(
     `[copybara] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
   );
+  const github = createOctokit(app.token);
+  // a copy's `(#123)` names the PR only where people outside iterate can open it
+  const { data: repository } = await github.rest.repos.get(source);
+  const config = configFor({
+    origin: `https://github.com/${source.owner}/${source.repo}`,
+    pullRequests: repository.private ? "" : `${source.owner}/${source.repo}`,
+  });
   const work = mkdtempSync(join(tmpdir(), "copybara-"));
   try {
     // git's credential store, which Copybara hands to every git command it runs
@@ -75,17 +89,15 @@ export async function sync(options: {
     writeFileSync(credentials, `https://x-access-token:${app.token}@github.com\n`, { mode: 0o600 });
     const withToken = ["-c", `credential.helper=store --file=${credentials}`];
     for (const copy of COPIES) {
-      // An empty copy starts as this commit's snapshot: its history begins after its parent.
-      const empty = !(await output("git", [
-        ...withToken,
-        "ls-remote",
-        "--heads",
-        urlOf(copy),
-        "main",
-      ]));
-      const migrate = await copybara(copy, [
+      const last = (await copyHead({ copy, withToken, work }))?.copiedCommit;
+      const seed = !last || !(await hasCommit(github, last));
+      if (seed)
+        console.log(
+          `[copybara] ${copy}: ${last ? `${repository.full_name} has no ${last}, the last commit it copied` : "nothing copied yet"}; starting from a snapshot of ${options.sha}`,
+        );
+      const migrate = await copybara(config, copy, [
         options.sha,
-        ...(empty ? ["--force", "--last-rev", await parentOf(options.sha)] : []),
+        ...(seed ? await seedArgs(options.sha) : []),
         "--git-credential-helper-store-file",
         credentials,
         "--nogit-prompt",
@@ -101,7 +113,11 @@ export async function sync(options: {
         throw new Error(`Copybara's ${copy} exited with ${migrate.status}`);
 
       const expected = join(work, `${copy}-expected`);
-      await writeToFolder(copy, options.sha, expected);
+      await writeToFolder(config, copy, options.sha, expected, [
+        "--git-credential-helper-store-file",
+        credentials,
+        "--nogit-prompt",
+      ]);
       await checkCopy({ copy, sha: options.sha, expected, withToken, work });
     }
 
@@ -113,16 +129,15 @@ export async function sync(options: {
   }
 }
 
-/** What iterate/core would hold at `sha`, written to a folder and run through the self-host
- *  recipe, pushing nothing: a pull request's check that the copy still installs and builds. */
-export async function check(options: {
-  /** The commit to copy, which must be on GitHub (Copybara fetches it). */
-  sha: string;
-}) {
+/** What iterate/core would hold at this checkout's HEAD, written to a folder and run through the
+ *  self-host recipe, pushing nothing: a pull request's check that the copy still installs and
+ *  builds. Copybara reads the checkout itself, so a one-commit CI checkout needs no token. */
+export async function check() {
+  const config = configFor({ origin: pathToFileURL(REPO_ROOT).href, pullRequests: "" });
   const work = mkdtempSync(join(tmpdir(), "copybara-check-"));
   try {
     const folder = join(work, "core");
-    await writeToFolder("core", options.sha, folder);
+    await writeToFolder(config, "core", "HEAD", folder, []);
     // the folder as a fresh clone has it: every file committed, so the recipe's `git status` check
     // means what it does there, and iterate/core as its origin, which the build names core's
     // configs by (core/os/scripts/build.ts)
@@ -140,9 +155,9 @@ export async function check(options: {
   }
 }
 
-/** Copybara's `migrate` of a copy's workflow with `args`: its exit status (4: nothing to migrate)
- *  and what it printed. */
-async function copybara(copy: string, args: string[]) {
+/** Copybara's `migrate` of a copy's workflow in `config` with `args`: its exit status (4: nothing
+ *  to migrate) and what it printed. */
+async function copybara(config: string, copy: string, args: string[]) {
   const javaHome = process.env.JAVA_HOME;
   if (!javaHome) throw new Error("JAVA_HOME is unset: Copybara needs Java 25 or newer");
   const jar = await copybaraJar();
@@ -151,7 +166,7 @@ async function copybara(copy: string, args: string[]) {
       "-jar",
       jar,
       "migrate",
-      CONFIG,
+      config,
       copy,
       ...args,
     ]);
@@ -162,10 +177,24 @@ async function copybara(copy: string, args: string[]) {
   });
 }
 
-/** What a copy holds at `sha`, as Copybara writes it: the same file selection and
- *  transformations as a migration. */
-async function writeToFolder(copy: string, sha: string, folder: string) {
-  const written = await copybara(copy, [sha, "--to-folder", "--folder-dir", folder, "--squash"]);
+/** What a copy holds at `ref`, as Copybara writes it: the same file selection and
+ *  transformations as a migration, from that one commit (a CI checkout has no other). */
+async function writeToFolder(
+  config: string,
+  copy: string,
+  ref: string,
+  folder: string,
+  args: string[],
+) {
+  const written = await copybara(config, copy, [
+    ref,
+    "--to-folder",
+    "--folder-dir",
+    folder,
+    "--squash",
+    "--git-origin-fetch-depth=1",
+    ...args,
+  ]);
   if (written.status === 0) return;
   process.stdout.write(written.stderr);
   throw new Error(`Copybara's ${copy} --to-folder exited with ${written.status}`);
@@ -207,10 +236,57 @@ async function output(
   return stdout.trim();
 }
 
-/** `sha`'s first parent, from this checkout (a CI checkout is one commit deep: fetched if need be). */
-async function parentOf(sha: string) {
-  await run("git", ["fetch", "--quiet", "--depth=2", "origin", sha], { cwd: REPO_ROOT });
-  return output("git", ["rev-parse", `${sha}^`], { cwd: REPO_ROOT });
+/**
+ * copy.bara.sky as a run reads it, with ORIGIN (the repository Copybara copies from) and
+ * PULL_REQUESTS (whose PRs a copy's `(#123)` names; empty drops it) set. Copybara reads its config
+ * and no environment, and a url it is handed with a commit only replaces the config's for that
+ * commit: the copy's last `GitOrigin-RevId` is looked up at the config's. Written once per
+ * configuration under the name Copybara requires, so its cache of the origin, kept by the config's
+ * path, serves the next run.
+ */
+function configFor(values: { origin: string; pullRequests: string }) {
+  let config = readFileSync(CONFIG, "utf8");
+  for (const [name, value] of Object.entries({
+    ORIGIN: values.origin,
+    PULL_REQUESTS: values.pullRequests,
+  })) {
+    const line = new RegExp(`^${name} = ".*"$`, "m");
+    if (!line.test(config)) throw new Error(`copy.bara.sky has no ${name} = "…" line`);
+    config = config.replace(line, () => `${name} = ${JSON.stringify(value)}`);
+  }
+  const hash = createHash("sha256").update(config).digest("hex").slice(0, 16);
+  const directory = join(tmpdir(), "copybara-config", hash);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "copy.bara.sky"), config);
+  return join(directory, "copy.bara.sky");
+}
+
+/**
+ * Copybara's arguments that start a copy again from one snapshot of `sha`, whatever it held: SQUASH
+ * writes `sha`'s whole tree, where ITERATIVE from `sha`'s parent copies nothing when `sha` touches no
+ * copied file; forced past a last copied commit this repository doesn't have; with `sha`'s own
+ * message, as an iterative copy of it has. A repository's first commit has no parent, and is its
+ * whole history. When the copy already holds the tree, Copybara copies nothing (exit 4), and the
+ * next run seeds again.
+ */
+async function seedArgs(sha: string) {
+  // a CI checkout is one commit deep, and this one is `sha`; one commit more never deepens it
+  const present = await output("git", ["cat-file", "-t", sha], { cwd: REPO_ROOT }).then(
+    () => true,
+    () => false,
+  );
+  if (!present)
+    await run("git", ["fetch", "--quiet", "--depth=1", "origin", sha], { cwd: REPO_ROOT });
+  // the raw commit names its parent even where a shallow checkout doesn't have it
+  const commit = await output("git", ["cat-file", "commit", sha], { cwd: REPO_ROOT });
+  const parent = /^parent ([0-9a-f]{40})$/m.exec(commit)?.[1];
+  return [
+    "--squash",
+    "--force",
+    ...(parent ? ["--last-rev", parent] : ["--init-history"]),
+    "--force-message",
+    commit.slice(commit.indexOf("\n\n") + 2),
+  ];
 }
 
 /**
@@ -244,19 +320,14 @@ async function checkSelfHost(checkout: string) {
 }
 
 /**
- * A copy is in sync when its head's tree hash equals the hash of the folder Copybara wrote for
- * `sha`. A git tree hash is a hash of the content alone, so equal hashes mean every file is the
- * same, and a file added by hand shows up too. Only the copy's head commit and its trees are
- * fetched, and its `GitOrigin-RevId` trailer must name the iterate/iterate commit it came from.
+ * A copy's main, fetched one commit deep without blobs into a bare repository in `work`: its head,
+ * its tree, and the commit it was copied from (its `GitOrigin-RevId` trailer, empty when it has
+ * none), or undefined when the copy has no main yet.
  */
-async function checkCopy(input: {
-  copy: string;
-  sha: string;
-  expected: string;
-  withToken: string[];
-  work: string;
-}) {
+async function copyHead(input: { copy: string; withToken: string[]; work: string }) {
   const url = urlOf(input.copy);
+  if (!(await output("git", [...input.withToken, "ls-remote", "--heads", url, "main"])))
+    return undefined;
   const gitDir = join(input.work, `${input.copy}.git`);
   const git = (...args: string[]) =>
     output("git", ["--git-dir", gitDir, ...args], {
@@ -273,23 +344,47 @@ async function checkCopy(input: {
     url,
     "main",
   );
-  const copiedCommit = await git(
-    "log",
-    "-1",
-    "--format=%(trailers:key=GitOrigin-RevId,valueonly)",
-    "FETCH_HEAD",
-  );
-  if (!/^[0-9a-f]{40}$/.test(copiedCommit))
-    throw new Error(`${url}'s main names no GitOrigin-RevId: ${JSON.stringify(copiedCommit)}`);
-  const head = await git("rev-parse", "FETCH_HEAD");
-  const tree = await git("rev-parse", "FETCH_HEAD^{tree}");
-  await git("--work-tree", input.expected, "add", "--all", ".");
-  const expectedTree = await git("write-tree");
-  if (tree !== expectedTree)
+  return {
+    git,
+    commit: await git("rev-parse", "FETCH_HEAD"),
+    tree: await git("rev-parse", "FETCH_HEAD^{tree}"),
+    copiedCommit: await git(
+      "log",
+      "-1",
+      "--format=%(trailers:key=GitOrigin-RevId,valueonly)",
+      "FETCH_HEAD",
+    ),
+  };
+}
+
+/**
+ * A copy is in sync when its head's tree hash equals the hash of the folder Copybara wrote for
+ * `sha`. A git tree hash is a hash of the content alone, so equal hashes mean every file is the
+ * same, and a file added by hand shows up too. Only the copy's head commit and its trees are
+ * fetched, and its `GitOrigin-RevId` trailer must name a commit (seeded by a snapshot that changed
+ * nothing, it still names the archive's until a commit changes the copy).
+ */
+async function checkCopy(input: {
+  copy: string;
+  sha: string;
+  expected: string;
+  withToken: string[];
+  work: string;
+}) {
+  const url = urlOf(input.copy);
+  const head = await copyHead(input);
+  if (!head) throw new Error(`${url} has no main`);
+  if (!/^[0-9a-f]{40}$/.test(head.copiedCommit))
+    throw new Error(`${url}'s main names no GitOrigin-RevId: ${JSON.stringify(head.copiedCommit)}`);
+  await head.git("--work-tree", input.expected, "add", "--all", ".");
+  const expectedTree = await head.git("write-tree");
+  if (head.tree !== expectedTree)
     throw new Error(
-      `${url}/commit/${head} is not what ${input.sha} should copy: ${await git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
+      `${url}/commit/${head.commit} is not what ${input.sha} should copy: ${await head.git("diff-tree", "-r", "--name-status", expectedTree, head.tree)}`,
     );
-  console.log(`[copybara] in sync: ${url}/commit/${head} is ${input.sha}'s (tree ${tree})`);
+  console.log(
+    `[copybara] in sync: ${url}/commit/${head.commit} is ${input.sha}'s (tree ${head.tree})`,
+  );
 }
 
 /** The pinned Copybara release's jar, downloaded once per machine and checked against its SHA-256. */

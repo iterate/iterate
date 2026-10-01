@@ -387,13 +387,13 @@ jobs:
         run: echo "CI_TRACE_STATUS_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Setup
         uses: ./.depot/actions/setup
-      # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow
-      # and its jobs' logs; only `@@ci-trace` lines are kept.
+      # Which tokens read what: scripts/ci/tracing/cli.ts `current`.
       - name: Collect the trace
         id: trace
         timeout-minutes: 5
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci/tracing/cli.ts current ci-trace.ignoreme
       # A re-run of this job alone keeps the execution, so the name, of the run it traces; without
       # overwrite the upload fails and the report statuses are never posted.
