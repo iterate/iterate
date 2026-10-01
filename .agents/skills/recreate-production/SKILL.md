@@ -6,7 +6,7 @@ description: Capture or restore a selected project after a deliberate production
 # Recreate a production project
 
 Use this skill only for a deliberate production recovery. Read
-[Project recovery seeds](../../../core/os/docs/project-seeds.md) before acting: it explains what a
+[Project recovery seeds](../../../docs/project-seeds.md) before acting: it explains what a
 seed holds, what `apply` converges and refuses, hostnames, and the merge pause. A seed is a semantic
 snapshot of one project, not a database dump.
 
@@ -32,20 +32,20 @@ non-secret counts, hostnames and paths.
 
    A seed does not carry the connections, installed processors or repo origins a project set up
    at runtime. List them for each project and keep the list with the archive
-   ([What a seed does not carry](../../../core/os/docs/project-seeds.md#what-a-seed-does-not-carry)).
+   ([What a seed does not carry](../../../docs/project-seeds.md#what-a-seed-does-not-carry)).
 
 2. Pause merges from the erase until `verify-structure` passes: every merge that touches the Worker
    redeploys prd, and a deploy resets Durable Objects under a running `apply`. The owner or you
    announce the pause where the team merges (nothing enforces it), and check that no Deploy OS run
    is in flight (the command is in
-   [`core/os/docs/project-seeds.md`](../../../core/os/docs/project-seeds.md), "Pause merges").
+   [`docs/project-seeds.md`](../../../docs/project-seeds.md), "Pause merges").
 3. Inventory the erase with `pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run`.
    The erase and the deploy after it are separate operations, run only on the user's explicit
    request; no seed command performs either. Never roll `os-prd` back until `verify-structure`
    passes, and never onto a version tagged `erase-parked`: the erase leaves one, and a rollback
    onto it deletes every Durable Object. The deploy's post-deploy check posts to #ci that the
    project hosts answer 421 until `apply`; that is expected. The recovery if a rollback lands on it
-   anyway is in [`core/os/docs/project-seeds.md`](../../../core/os/docs/project-seeds.md), "Never
+   anyway is in [`docs/project-seeds.md`](../../../docs/project-seeds.md), "Never
    roll `os-prd` back".
 4. Restore every seed, then compare the whole structure with the capture:
 
@@ -67,7 +67,7 @@ non-secret counts, hostnames and paths.
    owner to-do for later. If a step needs a person, such as a GitHub admin opening the connect
    link once, ask for it during the window. If nobody does it, the first line of your report says
    the recreate is not done and names what is missing. The recipe is in
-   [What a seed does not carry](../../../core/os/docs/project-seeds.md#what-a-seed-does-not-carry).
+   [What a seed does not carry](../../../docs/project-seeds.md#what-a-seed-does-not-carry).
 
 A rerun of `apply` resets the project to its archive (config tree, every archived secret's value,
 the members). Inside the restore window that only finishes what was cut off. Never rerun it on a

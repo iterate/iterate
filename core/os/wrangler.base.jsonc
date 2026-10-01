@@ -2,7 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os",
   // Vite builds the Worker from this entry. scripts/build.ts first prepares generated source the
-  // Worker imports; vite.config.ts combines these bindings with one environment from envs.ts.
+  // Worker imports; vite.config.ts combines these bindings with the deployment the build is handed
+  // (scripts/generate-wrangler-config.ts `deploymentFromEnv`): none for a local build, self-host,
+  // or the `OS_DEPLOYMENT` its caller passes.
   "main": "src/worker.ts",
   // Start renders the landing and sign-in pages; consent and shared static files live in public/.
   // Worker-first routing keeps assets off project hosts and lets the Worker gate consent.

@@ -278,6 +278,11 @@ Against a deployment, the bearer and the password are that environment's
 secrets, inside the `APP_CONFIG` of its Doppler config
 (`os/preview` for previews, `os/prd` for production).
 Read them under `doppler run`, never into a shared channel.
+`apps/agents/scripts/client.ts`, `scripts/os/control-plane-load.ts` and
+`core/os/examples/serve-localhost.mjs` read `APP_CONFIG_SECRETS__ADMIN_BEARER`
+like the CLI; `scripts/os/project-seed.ts`, `seed-instance-secrets.ts`,
+`preview.ts` and `scripts/ci/context-sweep.ts` read `secrets.adminBearer` out
+of the target's Doppler `APP_CONFIG`.
 
 The deployment's two secrets give you three ways in:
 
@@ -416,7 +421,9 @@ signs in against that core/os, and every link between them names the same
 deployment's apps. The name decides everything (`previewDeployment` in
 `envs.ts`), and the build and deploy are prd's (`scripts/os/deploy.ts`,
 `deployApp`). Deployments use workers.dev and have no project hosts: projects
-are paths on the one origin. Commands: `core/os/README.md`.
+are paths on the one origin. Main OS e2e, the latency guard and the
+real-model suite use the prefixes `main`, `latency` and `real-model`: leave
+those names to CI. Commands: [Story 2](#story-2-run-what-ci-runs-locally).
 
 ### The model: a fresh deployment per tested commit
 
@@ -493,8 +500,10 @@ its timeout counts as red. The full mutating proof is each PR's deployment.
 
 **Main on dev** (`os`, `dash`, … at `*.iterate-dev-preview.workers.dev`,
 `osEnvs.preview` in `envs.ts`) is main on the dev/preview account, redeployed
-in place by `preview-parents.yml` from every such push and erased nightly. People
-use it by hand; nothing a PR deploys depends on it. (The workflow and the
+in place by `preview-parents.yml` from every such push and erased nightly
+(`pnpm preview reset-parent`, in the Preview sweep workflow). People use it by
+hand; nothing a PR deploys depends on it. To deploy it by hand from a checkout:
+`pnpm preview deploy-parents`. (The workflow and the
 `deploy-parents` command keep the name from when every PR's Worker Preview
 branched off these workers.)
 
@@ -543,12 +552,24 @@ when the sweep could not act.
 
 ### Story 2: run what CI runs, locally
 
-The `pnpm preview` commands CI runs (`deploy`, `e2e`, `specs`, `delete`,
-`sweep`) run from `core/os` under Doppler `os/preview`; they are in
-[core/os/README.md](../core/os/README.md). Given the PR's number, `deploy`
-deploys your checkout's commit as `pr<n>-<sha7>`: the same deployment CI makes
+CI's `pnpm preview` commands run from the repository root under Doppler
+`os/preview`:
+
+```bash
+doppler run --project os --config preview -- pnpm preview deploy --pr <number> --apps all
+doppler run --project os --config preview -- pnpm preview e2e --pr <number>
+doppler run --project os --config preview -- pnpm preview specs --name main
+doppler run --project os --config preview -- pnpm preview delete --pr <number>
+doppler run --project os --config preview -- pnpm preview sweep --dry-run
+doppler run --project os --config preview -- pnpm preview deploy-parents
+```
+
+Given the PR's number, `deploy` deploys your checkout's commit as
+`pr<n>-<sha7>` (`<name>-<sha7>` with `--name`): the same deployment CI makes
 when your checkout is the commit CI tests, a deployment of its own otherwise.
-`e2e` and `specs` test the PR's newest deployment.
+`e2e` (the Vitest e2e suite) and `specs` (the Playwright specs) test the PR's
+newest deployment, or with `--name` a name's (`--name main` is Main OS e2e's).
+`delete` removes every deployment of the PR or name.
 
 For a focused flake hunt, reuse the exact deployment and run one test file or
 one test repeatedly without redeploying (from `test/`):
@@ -651,6 +672,21 @@ the deploy ships Doppler `os/preview`'s two secrets (`APP_CONFIG`,
 identifies itself by its client-metadata URL. The deploy creates core/os's D1
 (then migrates it), R2 bucket and Artifacts namespace by name; wrangler
 provisions its KV namespaces on the first deploy.
+
+The control plane's D1 is `os-prd-db` on prd, `os-parent-db` on main on dev
+and `<deployment>-os-db` on a per-commit deployment. prd's and main on dev's
+primaries are in western Europe; a per-commit deployment's is created near the
+job that deploys it, which for CI is where its suites run (`scripts/os/d1.ts`,
+which also migrates it before the code that reads it uploads).
+
+The deployment's own keys, which it lends its projects
+([integrations](../core/os/docs/integrations.md)):
+`pnpm os:seed-instance-secrets --env <name> [--deployment <pr<n>-<sha7>>] [--lend-to-every-project]`
+sets `/secrets/exa`, `/secrets/parallel` and `/secrets/openai` from the
+target's Doppler `os` config: `EXA_API_KEY`, `PARALLEL_API_KEY` and
+`OPENAI_API_KEY`. `--env` has no default, and `--env prd` also needs
+`--confirm-prd`. A per-commit deployment's keys go with it, so a PR's next push
+needs seeding again.
 
 ## Public webhooks
 
