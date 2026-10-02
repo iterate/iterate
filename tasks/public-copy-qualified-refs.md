@@ -5,8 +5,9 @@ size: small
 
 # The public copies name PRs and issues as owner/repo#N
 
-**Status:** spec only. The test fails on main by design (30 lines in 17 files) until
-iterate/iterate#3509 merges and this branch merges main.
+**Status:** implemented; red by design. The test fails on main with 31 refs in 17 files, which
+iterate/iterate#3509 fixes, and passes on iterate/iterate#3509's tree. Left: merge main once
+iterate/iterate#3509 lands, and see it green.
 
 The public copies (iterate/core, iterate/packages; `copybara/copy.bara.sky`) hold `core/`,
 `packages/`, `configs/` and a few root files. A bare `#N` there names an iterate/iterate PR,
@@ -40,8 +41,9 @@ PR, which is what it'll be written to mean.
 
 ## Checklist
 
-- [ ] `git mv lint/copy-doc-links.test.ts lint/public-copies.test.ts`; hoist the copy list into
-      a helper at the bottom both tests use
-- [ ] the new test: fails on main with the 30 lines iterate/iterate#3509 fixes, passes on
-      iterate/iterate#3509's head
+- [x] `git mv lint/copy-doc-links.test.ts lint/public-copies.test.ts`; hoist the copy list into
+      a helper at the bottom both tests use _`publicCopies()` returns each copy's path → source map_
+- [x] the new test: fails on main with the 30 lines iterate/iterate#3509 fixes, passes on
+      iterate/iterate#3509's head _31 refs on 30 lines; 2 passed with the file copied into
+      iterate/iterate#3509's worktree_
 - [ ] PR stays red until iterate/iterate#3509 merges; then merge main and check it's green
