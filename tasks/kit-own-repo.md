@@ -83,11 +83,13 @@ go back to listing iterate/iterate's releases.
 1. Merge the iterate/iterate PR that removes `apps/kit` (deletes `deploy-kit.yml` and
    `kit-firmware.yml`). k.iterate.com keeps serving its last deploy, still listing iterate/iterate's
    releases, which the archive keeps serving.
-2. Merge iterate/kit's PR. Its main push deploys Kit, which then lists iterate/kit's releases:
-   the copied `003103-…` ones at first, so there is no gap. Then it builds and publishes
-   `003104-…` for every board (the PR changes files in every board's inputs).
-3. Check k.iterate.com lists `003104-…` and serves their files (the firmware workflow's last step
-   checks the files).
+2. Deploy prd from iterate/kit#1's head (`pnpm deploy --env prd`). Kit then lists iterate/kit's
+   releases, the copied `003103-…` ones, so there is no gap. Deploying before the merge matters:
+   on the merge's push, Deploy and Kit Firmware both take about 3 minutes, and the firmware's last
+   step (k.iterate.com serves the new files) would race prd's deploy and page.
+3. Merge iterate/kit's PR. Its main push deploys again and builds and publishes `003104-…` for
+   every board (the PR changes files in every board's inputs).
+4. Check k.iterate.com lists `003104-…`.
 
 ## Plan
 
@@ -103,7 +105,7 @@ go back to listing iterate/iterate's releases.
       the branch serves the releases _(sign-in reaches the dev platform; I didn't sign in)_
 - [x] iterate/iterate PR: remove `apps/kit` and its plumbing (workflows, preview set, envs, knip,
       doppler.yaml, docs, tests)
-- [ ] Cutover (Misha merges, in order): this PR, then iterate/kit#1
+- [ ] Cutover (Misha, in order): merge this PR, deploy prd from iterate/kit#1's head, merge it
 - [ ] Tell the Archive Handover session once kit is gone _(told it the PRs are open)_
 - [x] Tell the apps-into-packages session
 - [x] Note in `tasks/run-this-script.md` that Kit's Prepare card is now an iterate/kit change
