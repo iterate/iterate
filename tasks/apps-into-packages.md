@@ -27,20 +27,20 @@ iterate/packages after each Deploy OS (iterate/iterate#3493).
 
 ## Where each app goes
 
-| Now                                     | After                                                       |
-| --------------------------------------- | ----------------------------------------------------------- |
-| `apps/dash`                             | `packages/dash`                                             |
-| `apps/notes`                            | `packages/notes`                                            |
-| `apps/docs`                             | `packages/docs-app`                                         |
-| `apps/agents`                           | `packages/agents-app`                                       |
-| `apps/voice`                            | `packages/voice-app`                                        |
-| `apps/admin`                            | `packages/admin`                                            |
-| `apps/spa`                              | `packages/spa`                                              |
-| `apps/browser-extension`                | `packages/browser-extension`                                |
-| `apps/kit`                              | stays in `apps/` until its own PR moves it to `iterate/kit` |
-| `apps/ci-reports`, `apps/dummy-petshop` | stay in `apps/`, private                                    |
+| Now                                     | After                                              |
+| --------------------------------------- | -------------------------------------------------- |
+| `apps/dash`                             | `packages/dash`                                    |
+| `apps/notes`                            | `packages/notes`                                   |
+| `apps/docs`                             | `packages/docs-app`                                |
+| `apps/agents`                           | `packages/agents-app`                              |
+| `apps/voice`                            | `packages/voice-app`                               |
+| `apps/admin`                            | `packages/admin`                                   |
+| `apps/spa`                              | `packages/spa`                                     |
+| `apps/browser-extension`                | `packages/browser-extension`                       |
+| `apps/kit`                              | gone: iterate/iterate#3511 moves it to iterate/kit |
+| `apps/ci-reports`, `apps/dummy-petshop` | stay in `apps/`, private                           |
 
-After this, `apps/` means "private": internal CI tooling and test fixtures, plus kit until it leaves.
+After this, `apps/` means "private": internal CI tooling and test fixtures.
 
 **Folder names.** Folder = package name without `@iterate-com/`. That avoids the clashes with
 `packages/docs` (`@iterate-com/docs`) and `packages/voice` (`@iterate-com/voice`) and needs no
@@ -53,9 +53,8 @@ moves the published libraries too and changes the depth of every path in six pac
 
 **Why each one (Misha, 2026-10-02):**
 
-- **kit**: own repo per 9/29, but not in this PR. It's 464 files with its own firmware CI
-  (`kit-firmware.yml`) and release assets that `apps/kit/src/firmware/catalog.ts`
-  (`FIRMWARE_REPOSITORY`) downloads anonymously. Extracting it is its own job.
+- **kit**: its own repo per 9/29, https://github.com/iterate/kit. iterate/iterate#3511 (draft)
+  removes `apps/kit`; iterate/kit#1 makes it build, release and deploy itself. Not part of this move.
 - **voice app**: friends use it with Kit, and `packages/voice` is already public. If voice later gets
   its own repo, it goes with kit, `packages/voice` and `configs/voice`.
 - **admin**: public. Its source has no secrets or state of its own; it's an OAuth client like the dash.
@@ -122,7 +121,7 @@ Either way the copy no longer waits for a production deploy, so "after each prod
 
 ## Out of scope
 
-- Extracting kit (and later voice) into their own repos.
+- Extracting voice into its own repo, later. Kit's extraction is iterate/iterate#3511.
 - The license mismatch: AGPL at the root (which the copy includes), Apache-2.0 in the packages'
   `package.json` files.
 - The iterate/private cutover itself (`tasks/package-urls-survive-repo-move.md`).
@@ -139,3 +138,5 @@ Either way the copy no longer waits for a production deploy, so "after each prod
   tip to be exactly the synced commit; `preview.ts` still builds app paths from `apps/<name>`.
 - 2026-10-02: Misha: make the move in iterate/private, after the cutover. This branch holds the plan
   and the script until then.
+- 2026-10-02: kit has its own repo now (iterate/iterate#3511, iterate/kit#1), so it's out of this
+  move's table.
