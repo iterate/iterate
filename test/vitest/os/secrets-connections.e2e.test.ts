@@ -62,7 +62,7 @@ test("worker: a userspace GraphQL session login in the secret's own exchange cod
   const petshop = petshopBaseUrl();
   const username = `mum-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
   // The secret: the account credential and NOTHING token-shaped. "correct-horse" is the fixture's
-  // one accepted password (apps/dummy-petshop/src/graphql-login.ts).
+  // one accepted password (internal-packages/dummy-petshop/src/graphql-login.ts).
   const source = petshopGraphqlExchangeSource();
   await itx.secrets.set(
     "/secrets/session-login",

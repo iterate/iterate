@@ -12,7 +12,7 @@ import { signClaims, verifyClaims } from "../../../core/os/src/caller.ts";
 import type { Env } from "../../../core/os/src/env.ts";
 import { identityResponse } from "../../../core/os/src/identity.ts";
 import { authorizationForToken } from "../../../core/os/src/oauth.ts";
-import { fakeUserIdOf } from "../../../apps/dummy-petshop/src/state.ts";
+import { fakeUserIdOf } from "../../../internal-packages/dummy-petshop/src/state.ts";
 import type { AccountState } from "../../../core/os/src/account/contract.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
 import {

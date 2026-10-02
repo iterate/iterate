@@ -365,7 +365,7 @@ export const spaEnvs = {
   },
 };
 
-/** apps/dummy-petshop — the fake third party core/os's tests connect to over the real network (a
+/** internal-packages/dummy-petshop — the fake third party core/os's tests connect to over the real network (a
  *  plain Worker, no Start). Production only: its workers.dev origin, no routes, no DNS. */
 export interface DummyPetshopEnv {
   cloudflareAccountId: string;
@@ -384,7 +384,7 @@ export const dummyPetshopEnvs: Record<string, DummyPetshopEnv> = {
   },
 };
 
-/** apps/ci-reports — the viewer for CI traces and Playwright HTML reports (docs/ci-traces.md): a plain
+/** internal-packages/ci-reports — the viewer for CI traces and Playwright HTML reports (docs/ci-traces.md): a plain
  *  Worker serving public Depot artifacts, behind Cloudflare Access. CI tooling, so it lives on the
  *  dev/preview account with CI's Doppler config (_shared/preview supplies both the Cloudflare and the
  *  Depot token): its workers.dev origin, no routes, no DNS. The env is named for its use, not its

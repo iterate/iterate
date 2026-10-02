@@ -115,7 +115,7 @@ export default class CiTrace {
   /**
    * Post the run's report links as commit statuses: **CI trace**, its description the time to green
    * or red, and **Playwright report** when the e2e job uploaded one. Each opens its Depot artifact in
-   * the ci-reports viewer (apps/ci-reports). A status says the report exists, so both are `success`;
+   * the ci-reports viewer (internal-packages/ci-reports). A status says the report exists, so both are `success`;
    * the run's own checks carry the verdict. Runs after the upload step: Depot lists an artifact once
    * its upload finished.
    */
@@ -196,7 +196,7 @@ function traceArtifactName(workflowId: string, executionId: string) {
   return `public-ci-trace-${workflowId}-${executionId}`;
 }
 
-/** Where apps/ci-reports opens a public Depot artifact: its report, at the artifact's root. */
+/** Where internal-packages/ci-reports opens a public Depot artifact: its report, at the artifact's root. */
 function reportUrl(artifactId: string) {
   return `${ciReportsEnvs.ci.baseUrl}/${artifactId}/`;
 }

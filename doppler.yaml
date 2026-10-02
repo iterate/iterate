@@ -18,6 +18,6 @@ setup:
   - project: voice
     path: packages/voice-app/
   - project: dummy-petshop
-    path: apps/dummy-petshop/
+    path: internal-packages/dummy-petshop/
   - project: _shared
-    path: apps/ci-reports/
+    path: internal-packages/ci-reports/

@@ -479,7 +479,7 @@ jobs:
 
   # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of
   # the jobs it needs as trace.html and trace.json, this job's artifact, then two commit statuses
-  # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to
+  # opening the ci-reports viewer (internal-packages/ci-reports): "CI trace", whose description is the time to
   # green (the last test job's success) or to red (the first failed job), and "Playwright report",
   # the Browser specs job's merged HTML report. After the deploy and every suite job settle,
   # whatever their outcome; never when none ran, nor for a PR that changes no preview path. Main OS

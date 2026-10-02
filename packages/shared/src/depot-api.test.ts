@@ -50,7 +50,7 @@ test.for([
   expect(depot.warn).not.toHaveBeenCalled();
 });
 
-// ci-reports reads a 404 as an artifact that expired (apps/ci-reports/src/artifact.ts).
+// ci-reports reads a 404 as an artifact that expired (internal-packages/ci-reports/src/artifact.ts).
 test("an answer about the request is an HttpAnswerError with its status", async () => {
   const depot = depotAnswering(404);
 

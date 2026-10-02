@@ -22,23 +22,27 @@ iterate/private (Misha, 2026-10-02), so the apps' source stays public after it.
   `copy-packages.yml` run.
 - When it merges, tell the "Iterate repo privatization status" session
   (`local_f9dad892-5f7e-44be-bd4c-916be3847685`): iterate/private's draft root commit lists the
-  `apps/` and `packages/` layout.
+  `packages/` and `internal-packages/` layout.
 
 ## Where each app goes
 
-| Now                                     | After                        |
-| --------------------------------------- | ---------------------------- |
-| `apps/dash`                             | `packages/dash`              |
-| `apps/notes`                            | `packages/notes`             |
-| `apps/docs`                             | `packages/docs-app`          |
-| `apps/agents`                           | `packages/agents-app`        |
-| `apps/voice`                            | `packages/voice-app`         |
-| `apps/admin`                            | `packages/admin`             |
-| `apps/spa`                              | `packages/spa`               |
-| `apps/browser-extension`                | `packages/browser-extension` |
-| `apps/ci-reports`, `apps/dummy-petshop` | stay in `apps/`, private     |
+| Now                                     | After                         |
+| --------------------------------------- | ----------------------------- |
+| `apps/dash`                             | `packages/dash`               |
+| `apps/notes`                            | `packages/notes`              |
+| `apps/docs`                             | `packages/docs-app`           |
+| `apps/agents`                           | `packages/agents-app`         |
+| `apps/voice`                            | `packages/voice-app`          |
+| `apps/admin`                            | `packages/admin`              |
+| `apps/spa`                              | `packages/spa`                |
+| `apps/browser-extension`                | `packages/browser-extension`  |
+| `apps/ci-reports`, `apps/dummy-petshop` | `internal-packages/`, private |
 
-After this, `apps/` means "private": internal CI tooling and test fixtures.
+`apps/` is gone. `internal-packages/` holds what stays private: internal CI tooling and test
+fixtures. Two flat sibling folders whose names say they hold the same kind of thing and differ only
+in whether Copybara copies them (Misha and Jonas, 2026-10-02 huddle). Not chosen:
+`packages/published/` + `packages/internal/`, which would change every path's depth and the public
+paths in iterate/packages; `internal/`, shorter but it needs explaining.
 
 **Folder names.** Folder = package name without `@iterate-com/`. That avoids the clashes with
 `packages/docs` (`@iterate-com/docs`) and `packages/voice` (`@iterate-com/voice`) and needs no
@@ -130,7 +134,7 @@ Either way the copy no longer waits for a production deploy, so "after each prod
 - **After merge**, everyone runs `doppler setup` once to pick up the new folders.
 - **Open PRs**: Jonas's draft iterate/iterate#3478 adds `apps/telemetry` and touches
   `scripts/lib/start-app.ts`, `doppler.yaml`, `pnpm-workspace.yaml` and `knip.ts`. Telemetry is
-  internal, so it stays in `apps/`; expect small conflicts. Anything that adds a file under a moved
+  internal, so it goes in `internal-packages/`; expect small conflicts. Anything that adds a file under a moved
   app needs a manual move.
 - **Gitignored task files** in the root checkout won't be rewritten: `tasks/docs-app.ignoreme.md`.
 - Worker names, Doppler project names and package names don't change. Only folders do.
@@ -159,3 +163,8 @@ Either way the copy no longer waits for a production deploy, so "after each prod
 - 2026-10-02: PR CI green on `2fb923406`. Bugbot flagged `copy-packages.yml`'s header for
   repeating `copybara.ts`'s explanation of when each copy runs (rules/comments/no-repeated-explanations);
   the header now points there.
+- 2026-10-02: Misha and Jonas (huddle): ci-reports and the petshop stay in the monorepo, private,
+  in a folder named for what it holds. `apps/` → `internal-packages/` in this PR, before the cutover,
+  so iterate/private's history doesn't start with another move. Same depth, so only path mentions
+  changed; the platform-line lint rule and the LOC report's Product group now name
+  `internal-packages/**`.

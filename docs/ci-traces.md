@@ -16,7 +16,7 @@ changes no preview path gets no trace.
 
 ## The viewer
 
-`apps/ci-reports` is a Worker at
+`internal-packages/ci-reports` is a Worker at
 `https://ci-reports.iterate-dev-preview.workers.dev` (dev/preview account,
 deployed by `deploy-ci-reports.yml`). `/<artifact-id>/` opens a public Depot
 artifact of any repository's run: `trace.html` for a CI trace, the root

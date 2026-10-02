@@ -11,7 +11,7 @@ export default async function deploy(options: { env: string }) {
   await deployApp(getEnv(options.env, dummyPetshopEnvs), {
     dopplerProject: "dummy-petshop",
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
-    appLabel: "apps/dummy-petshop",
+    appLabel: "internal-packages/dummy-petshop",
     smokes: [
       { url: "/", ok: (response) => response.status === 200, label: "shop index" },
       {

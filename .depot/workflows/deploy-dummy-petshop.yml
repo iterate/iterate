@@ -9,7 +9,7 @@ on:
     branches: [main]
     paths:
       - .depot/workflows/deploy-dummy-petshop.yml
-      - apps/dummy-petshop/**
+      - internal-packages/dummy-petshop/**
       - packages/shared/**
       - envs.ts
       - scripts/lib/**
@@ -29,7 +29,7 @@ jobs:
       # envs.ts names the worker and the prd account; Doppler supplies the Cloudflare credentials.
       # PETSHOP_SEAL_KEY is already a worker secret, and deploys keep it. The deploy script ends by
       # smoking the shop's index and its state object.
-      - name: Deploy apps/dummy-petshop
+      - name: Deploy internal-packages/dummy-petshop
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm --dir apps/dummy-petshop run-script deploy --env prd
+        run: pnpm --dir internal-packages/dummy-petshop run-script deploy --env prd

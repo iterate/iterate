@@ -11,7 +11,7 @@ export default async function deploy(options: { env: string }) {
   await deployApp(env, {
     dopplerProject: "_shared",
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
-    appLabel: "apps/ci-reports",
+    appLabel: "internal-packages/ci-reports",
     requiredSecrets: ["DEPOT_CI_TELEMETRY_TOKEN"],
     smokes: [
       {

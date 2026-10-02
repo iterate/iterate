@@ -1,4 +1,4 @@
-// The SDK/platform line (core/lib/README.md#the-sdkplatform-line): under apps/, packages/ and
+// The SDK/platform line (core/lib/README.md#the-sdkplatform-line): under packages/, internal-packages/ and
 // core/lib, nothing imports core/os; test/ is outside the rule. The rows run .oxlintrc.json's own
 // overrides for `import-js/no-restricted-paths`, copied verbatim, over one temp project linted once
 // by the real oxlint binary; `reported` says whether the rule flags that file.
@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
 
-test("nothing under apps/, packages/ or core/lib imports core/os, whatever the import's shape", () => {
+test("nothing under packages/, internal-packages/ or core/lib imports core/os, whatever the import's shape", () => {
   const rows = [
     {
       path: "packages/dash/src/static.ts",
@@ -33,7 +33,7 @@ test("nothing under apps/, packages/ or core/lib imports core/os, whatever the i
       source: 'import { x } from "../../../core/os/./src/thing.ts";',
     },
     {
-      path: "apps/new-app/src/probe.ts",
+      path: "internal-packages/new-app/src/probe.ts",
       source: 'import { x } from "../../../core/os/src/thing.ts";',
     },
     {
