@@ -28,7 +28,7 @@ jobs:
       - name: Get release info
         id: release_info
         run: |-
-          # only the daily v… releases: kit-firmware/* tags (Kit's, before it moved to iterate/kit) and gh-attach-assets are not these
+          # only the daily v… releases: the repo's kit-firmware/* tags and gh-attach-assets are not these
           LAST_RELEASE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' || echo '')
           echo "last_release=$LAST_RELEASE" >> $GITHUB_OUTPUT
           # with no release yet (a repository's first), the changes since its first commit
