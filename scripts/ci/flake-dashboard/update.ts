@@ -1,5 +1,5 @@
 // THE FLAKE DASHBOARD'S WRITER: reads the flake records and suite summaries of CI's recent test
-// runs from R2 (./evidence.ts), computes issue #2580's body from them (./dashboard.ts), and
+// runs from R2 (./evidence.ts), computes the dashboard issue's body from them (./dashboard.ts), and
 // rewrites the issue when the body changed. `.depot/workflows/flake-dashboard.yml` runs it every
 // hour. Nothing is kept between runs.
 //

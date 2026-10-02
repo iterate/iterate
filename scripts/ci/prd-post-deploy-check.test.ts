@@ -29,7 +29,7 @@ test.for<{ case: string; hostStatus: number; pages: boolean }>([
   { case: "a host that answers", hostStatus: 200, pages: false },
   { case: "a host that redirects still answers", hostStatus: 302, pages: false },
   { case: "a host's own 404 is the site's answer", hostStatus: 404, pages: false },
-  // 2026-09-23 after #2888: every project host answered 421 while /version was fine
+  // 2026-09-23 after iterate/iterate#2888: every project host answered 421 while /version was fine
   { case: "a host that answers 421", hostStatus: 421, pages: true },
   { case: "a host that answers 500", hostStatus: 500, pages: true },
   { case: "a host that does not answer", hostStatus: 0, pages: true },

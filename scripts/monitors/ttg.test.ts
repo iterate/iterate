@@ -13,7 +13,7 @@ import {
   type TtgMemory,
 } from "./ttg.ts";
 
-// Depot's GetRunMetrics for run pxt90nlfvh (PR #3009, 2026-09-24), cut to the fields the guard reads.
+// Depot's GetRunMetrics for run pxt90nlfvh (PR iterate/iterate#3009, 2026-09-24), cut to the fields the guard reads.
 const pxt90nlfvh: RunMetrics = {
   run: {
     runId: "pxt90nlfvh",
@@ -28,7 +28,7 @@ const pxt90nlfvh: RunMetrics = {
   ],
 };
 
-// Depot's GetRunMetrics for run xwhttppx6h (PR #3197, 2026-09-25), cut to the fields the guard reads.
+// Depot's GetRunMetrics for run xwhttppx6h (PR iterate/iterate#3197, 2026-09-25), cut to the fields the guard reads.
 const xwhttppx6h: RunMetrics = {
   run: {
     runId: "xwhttppx6h",
@@ -72,7 +72,7 @@ test("a green push's time to green runs from the run's creation to its last chec
   });
 });
 
-// Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
+// Depot's GetRunMetrics for run l9b40r65b2 (PR iterate/iterate#3094) and v7gm132nt1 (PR iterate/iterate#3009, whose e2e failed
 // and passed on a re-run), cut to the fields the guard reads.
 test.for<{
   name: string;
@@ -135,7 +135,7 @@ test.for<{
   ).toMatchObject(expected);
 });
 
-// Depot's GetRunMetrics for run 7cjwv9crwz (PR #3192, 2026-09-25), which changed no preview path, cut
+// Depot's GetRunMetrics for run 7cjwv9crwz (PR iterate/iterate#3192, 2026-09-25), which changed no preview path, cut
 // to the fields the guard reads.
 const r7cjwv9crwz: RunMetrics = {
   run: {

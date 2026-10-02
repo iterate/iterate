@@ -1,7 +1,7 @@
 // vitest/os/perf/project-creation.perf.test.ts — CONCURRENT PROJECT CREATION, the regression the latency guard
 // exists for: creating many projects at once used to be practically instant, and more than once it
-// quietly became slow (#1601: first-touch creates of 60–120 s behind dead routes; #2168: ~6–8 s warm,
-// ~20 s cold; #2828's control-plane-load: 1000 at once took 70 s, projects.create p95 24.5 s). Here N
+// quietly became slow (iterate/iterate#1601: first-touch creates of 60–120 s behind dead routes; iterate/iterate#2168: ~6–8 s warm,
+// ~20 s cold; iterate/iterate#2828's control-plane-load: 1000 at once took 70 s, projects.create p95 24.5 s). Here N
 // people (1, 10, 25) each create their first project AT ONCE, each on a socket of their own as N
 // dashboards would, signed in as themselves (the operator's `as`, a sign-in's own find-or-create).
 // Every project is timed from the call:

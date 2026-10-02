@@ -5,7 +5,7 @@
 // must read that write, which KV does not promise across locations. Every other key stays in KV.
 //
 // WHY THIS EXISTS, AND WHEN IT GOES: the library has no storage option. Its refresh-token rotation
-// on eventually consistent KV is cloudflare/workers-oauth-provider#214, and #312 (pluggable storage
+// on eventually consistent KV is cloudflare/workers-oauth-provider#214, and cloudflare/workers-oauth-provider#312 (pluggable storage
 // providers, with a Durable Object adapter that serializes a grant's exchanges) is the fix it
 // proposes. When the library ships storage with strongly consistent grants, switch to it and
 // delete this file and control-plane/oauth-grants.ts. The pinned test in

@@ -1097,7 +1097,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: () => this.#withPlatformOrigin(this.#caller),
     invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
-    // `.hello()` over every transport (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
+    // `.hello()` over every transport (workerd's classifier rejects a Proxy, workerd#6873), branded RpcStubHandle
     // for the delivery loop.
     rpcStubs: {
       // A BORROW IS A USE: the quiet period runs from the call's end (this invoke may have borrowed

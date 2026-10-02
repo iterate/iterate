@@ -204,7 +204,7 @@ function CloseMobileSidebarOnNavigate({ locationKey }: { locationKey: string }) 
  *  and `CloseMobileSidebarOnNavigate` only fires once the location has changed. A modified or
  *  middle click, a download, or a link to another tab leaves the sheet open, as does a button (the
  *  collapse button, a dropdown trigger). This used to live in the vendored sidebar.tsx's
- *  SidebarMenuButton (#1984); a vendored file stays byte-identical to upstream
+ *  SidebarMenuButton (iterate/iterate#1984); a vendored file stays byte-identical to upstream
  *  (packages/ui/AGENTS.md). */
 function SidebarNav({
   navRef,

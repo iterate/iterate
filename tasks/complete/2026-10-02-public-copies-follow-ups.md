@@ -4,11 +4,11 @@ size: medium
 
 # The public copies: locked down, licensed, and documented for outsiders
 
-iterate/core and iterate/packages are public one-way Copybara copies of this repo (#3493:
+iterate/core and iterate/packages are public one-way Copybara copies of this repo (iterate/iterate#3493:
 `copybara/copy.bara.sky`, `scripts/ci/copybara.ts`, the copybara job in
 `.depot/workflows/deploy-os.yml`). iterate/iterate is about to become a public archive, with work
-moving to a private iterate/private (#3506, #3507), so these two become the only public copy of
-the code. Three follow-ups from #3493.
+moving to a private iterate/private (iterate/iterate#3506, iterate/iterate#3507), so these two become the only public copy of
+the code. Three follow-ups from iterate/iterate#3493.
 
 ## Status
 
@@ -81,7 +81,7 @@ Decided (Misha, 2026-10-01):
       root AGENTS.md already gives.
 - [x] The same class of dead link in iterate/packages (`configs/README.md`,
       `packages/{docs,petshop-sdk}/README.md`).
-- [x] `core/os/wrangler.base.jsonc:5` no longer describes the envs.ts lookup #3448 removed.
+- [x] `core/os/wrangler.base.jsonc:5` no longer describes the envs.ts lookup iterate/iterate#3448 removed.
 - [x] A test fails when a markdown file in either copy links a file the copy doesn't hold
       (`lint/copy-doc-links.test.ts`). _Fails on the old README with its 9 dead links. The AI
       linter's rule fixtures are skipped: they are rule files copied verbatim._
@@ -89,11 +89,11 @@ Decided (Misha, 2026-10-01):
 ## Implementation notes
 
 - The README told people to run `pnpm preview` from `core/os`, which has no such script since
-  #3456 moved the tooling to `scripts/os`; `docs/dev-environments.md` now says the repository
+  iterate/iterate#3456 moved the tooling to `scripts/os`; `docs/dev-environments.md` now says the repository
   root.
-- #3507 landed mid-task and rewrote `scripts/ci/copybara.ts`'s header and the README's MCP
+- iterate/iterate#3507 landed mid-task and rewrote `scripts/ci/copybara.ts`'s header and the README's MCP
   sentence (now `examples/mcp-run-scripts.mjs`, which iterate/core holds). Kept main's text in
-  both; the ruleset sentence joins the new header. #3507 also covers the Copybara origin and token
+  both; the ruleset sentence joins the new header. iterate/iterate#3507 also covers the Copybara origin and token
   for iterate/private, which this task had flagged.
 - `packages/ui`'s app server (`src/apps/server.ts`) imports `@iterate-com/shared`, which stays
   AGPL. No registry component imports it (`posthog.tsx` only names it in a comment).

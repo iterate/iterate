@@ -18,7 +18,7 @@ extern "C" {
  * frame; a dry ring is either a hole in the answer or the end of it; a frame
  * is skipped when the answer is behind with backlog to skip into, otherwise
  * handed to the speaker; and what was handed over is reported so the answer's
- * timeline advances. When the board and a since-deleted host CLI (#2710) each
+ * timeline advances. When the board and a since-deleted host CLI (iterate/iterate#2710) each
  * wrote that sequence around their own ring and sink, the two drifted apart
  * twice in a week — the board forgot to restart the timeline on ordinary
  * turns, the CLI forgot it on its live-audio dry path — because a rule

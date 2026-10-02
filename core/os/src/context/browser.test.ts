@@ -42,7 +42,7 @@ test("unwrapBrowserRunQuickAction: passes through JSON that is not the success/r
 });
 
 // ── Browser Run's own timeout ── `{"code":6002,"message":"A timeout was reached. …","detail":"Promise
-// timed out"}` on a one-line inline-HTML screenshot (PR #2934 553ab630, 2026-09-24 00:20 UTC): nothing
+// timed out"}` on a one-line inline-HTML screenshot (PR iterate/iterate#2934 553ab630, 2026-09-24 00:20 UTC): nothing
 // remote to wait for, so the timeout is the service's. A quick action on inline HTML retries it ONCE,
 // a second later, logged; a second one surfaces, and a `url` page's timeout (maybe the site's) and
 // every other failure are never retried.

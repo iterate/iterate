@@ -23,7 +23,7 @@ Status: done. The build pins what it pinned before for today's templates, and le
 - [x] `build.ts` pins each `@iterate-com/*` dependency whose version is a pkg.pr.new `@main` URL,
       and nothing else _the `ours` filter over `manifest.dependencies`, as on the experiment branch_
 - [x] the commit lookup (`checkoutPublishedPackageCommit`) runs only when a template needs it _`packagesCommit ||=` inside the filter_
-- [x] `apps/os/docs/integrations.md` names `iterate/integration-scopes` (moved in #3470) _line 147_
+- [x] `apps/os/docs/integrations.md` names `iterate/integration-scopes` (moved in iterate/iterate#3470) _line 147_
 - [x] lint, typecheck, and apps/os's tests (templates.test.ts covers the `@main` case) _oxlint, oxfmt, apps/os tsc (app and scripts), templates/build/published-package-commit tests (20)_
 
 ## Out of scope

@@ -65,7 +65,7 @@ the preview's e2e rows and browser specs, which now name the Default preset.
 
 ## Implementation notes
 
-- `tasks/core-lib.md` was still in `tasks/` when #3489 merged: moved to `complete/` here.
+- `tasks/core-lib.md` was still in `tasks/` when iterate/iterate#3489 merged: moved to `complete/` here.
 - core's unit tests and test/'s e2e setup both write `src/generated/config-templates.js`, now with
   different templates. They never run at once: root `pnpm test` runs core's unit tests beside
   test/'s node and Workers projects, which don't run that setup, and the Workers suite runs the

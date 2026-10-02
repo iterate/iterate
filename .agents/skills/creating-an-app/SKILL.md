@@ -25,7 +25,7 @@ Copy `scripts/app.ts` and `src/routes/` from `apps/voice`:
   under paths ingress needs Notes' `basePath` too (`apps/notes/src/base-path.ts`).
 
 The rest is the shared shell called with the app's own values: `vite.config.ts` is
-`startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, #2904),
+`startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, iterate/iterate#2904),
 `src/server.ts` is `appServerEntry` (`@iterate-com/ui/apps/server`: `/healthz`, which the deploy
 smoke hits, the PostHog proxy and the sign-in gate under the app's `clientName`) and
 `export { BrowserSession }`, and `src/router.tsx` is `createAppRouter`. Add the `package.json`

@@ -5,7 +5,7 @@ import { retryGithubPlatformFailures } from "./github.ts";
 
 const repo = { owner: "iterate", repo: "iterate" };
 
-test("asks a GET again after GitHub's 500 and returns the answer (the PR #2899 LOC report)", async () => {
+test("asks a GET again after GitHub's 500 and returns the answer (the PR iterate/iterate#2899 LOC report)", async () => {
   const fixture = githubAnswering(unexpectedError(), json(200, { number: 2899, body: "before" }));
 
   const { data } = await fixture.github.rest.pulls.get({ ...repo, pull_number: 2899 });

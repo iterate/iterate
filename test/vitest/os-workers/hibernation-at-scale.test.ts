@@ -68,7 +68,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
   expect(before.borrowedRpcStubs).toBeGreaterThanOrEqual(5); // warm from the previous test
 
   // The production sequence: the release (return the borrowed stubs — without this the eviction
-  // times out on "active references", the #6800 pin), THEN evict: instance torn down, storage
+  // times out on "active references", the workerd#6800 pin), THEN evict: instance torn down, storage
   // kept, hibernatable sockets hibernated.
   await releasePinsLikeProduction();
   await evictDurableObject(stub(CTX));
@@ -97,7 +97,7 @@ test("EVICT THEN WAKE: eviction drops every in-memory stub; a call pages the rel
 
 test("SCALE WAKE: after another eviction, a fan-out reaches ALL 200 clients", async () => {
   const callerItx = await fleetCaller();
-  await releasePinsLikeProduction(); // the previous test left 3+ stubs borrowed — same #6800 dance
+  await releasePinsLikeProduction(); // the previous test left 3+ stubs borrowed — same workerd#6800 dance
   await evictDurableObject(stub(CTX));
   expect(await state()).toMatchObject({ borrowedRpcStubs: 0 });
 
@@ -181,7 +181,7 @@ async function incarnationNow(): Promise<number> {
 /** The production pins' release on demand (support.ts's `releasePins`), then the two facts this
  *  file leans on: every borrowed stub returned, the DO dormant — evictDurableObject's de-facto
  *  precondition (see mechanism note (b) in the header: evicting a warm DO times out on "active
- *  references", exactly the production #6800 pin). */
+ *  references", exactly the production workerd#6800 pin). */
 async function releasePinsLikeProduction(): Promise<void> {
   await releasePins(CTX);
   // the release returned every borrowed stub

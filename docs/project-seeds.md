@@ -266,7 +266,7 @@ pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run
 
 **Pause merges to `main` from the erase until the last `apply` and `verify-structure`
 have passed.** Every merge that touches the Worker runs Deploy OS, which redeploys prd
-in the middle of the restore (#3032's deploy reset the Durable Objects under an `apply`).
+in the middle of the restore (iterate/iterate#3032's deploy reset the Durable Objects under an `apply`).
 Nothing enforces the pause. The owner,
 or the agent running the recreate, announces it where the team merges, before the
 erase, and lifts it after verification. Before the erase, check that no Deploy OS run

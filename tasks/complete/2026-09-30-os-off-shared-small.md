@@ -23,7 +23,7 @@ move into the `iterate` package.
 - [x] `app-config` (the APP_CONFIG mechanism) moves to `iterate/app-config`, with its test
 - [x] `compatibility-date` moves to `iterate/compatibility-date`
 - [x] docs: typescript-conventions.md and depot-ci.md describe the new entry-point idiom
-- [x] housekeeping: #3456's task file moves to tasks/complete/
+- [x] housekeeping: iterate/iterate#3456's task file moves to tasks/complete/
 
 ## Decisions
 
