@@ -87,7 +87,7 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
   `core/os/src/mcp.ts:75`: the "Make CI tooling, Copybara and ci-reports work from iterate/private"
   session (`local_a276104b-99ef-4620-92f5-5796547b3420`).
 - Kit firmware (`FIRMWARE_REPOSITORY`): Kit moves to its own public repo, iterate/kit, with its
-  releases (`tasks/kit-own-repo.md`, iterate/iterate#3511, iterate/kit#1).
+  releases (`tasks/complete/2026-10-02-kit-own-repo.md`, iterate/iterate#3511, iterate/kit#1).
 - apps/ → packages/ (`tasks/apps-into-packages.md`, `local_79e74bd2-2b8a-4062-8675-ca096cee0c44`).
   The move doesn't wait for it.
 

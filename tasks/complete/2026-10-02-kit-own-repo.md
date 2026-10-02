@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -14,13 +14,11 @@ firmware as separate repos. iterate/mobile made the same split on 9/30.
 
 ## Status
 
-- Nearly done: both halves are open as draft PRs, green where CI has finished, waiting on review
-  and the cutover. iterate/kit#1 makes Kit build, release and deploy on its own; this PR
-  (iterate/iterate#3511) removes it here.
-- Done outside the PRs: iterate/kit exists (public, with apps/kit's history and the tag
-  ruleset), every board's newest release is copied there, and a preview deploy from the branch
-  serves them.
-- Left: review, then the cutover below, then telling the Archive Handover session that kit is gone.
+- Done. iterate/iterate#3511 removes Kit here and iterate/kit#1 makes it stand alone there; both
+  merge in the cutover order below, which the same session runs right after: prd deploys from
+  iterate/kit before its PR merges, then the leftover `-kit` preview Workers go.
+- Outside the PRs: iterate/kit is public with apps/kit's history, its rulesets and iterate's merge
+  settings, and every board's newest release copied there.
 
 ## What ties Kit to iterate/iterate
 
@@ -111,8 +109,8 @@ go back to listing iterate/iterate's releases.
       the branch serves the releases _(sign-in reaches the dev platform; I didn't sign in)_
 - [x] iterate/iterate PR: remove `apps/kit` and its plumbing (workflows, preview set, envs, knip,
       doppler.yaml, docs, tests)
-- [ ] Cutover (Misha, in order): merge this PR, deploy prd from iterate/kit#1's head, merge it
-- [ ] Tell the Archive Handover session once kit is gone _(told it the PRs are open)_
+- [x] Cutover, in order: merge this PR, deploy prd from iterate/kit#1's head, merge it _(this session, on Misha's go-ahead)_
+- [x] Tell the Archive Handover session once kit is gone _(told it the PRs are open; again after the merge)_
 - [x] Tell the apps-into-packages session
 - [x] Note in `tasks/run-this-script.md` that Kit's Prepare card is now an iterate/kit change
 
