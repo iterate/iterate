@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -15,13 +15,11 @@ iterate/private (Misha, 2026-10-02), so the apps' source stays public after it.
 
 ## Status
 
-- Nearly done: the move, the name-to-folder fixes, the packages copy's own workflow, the dead
-  links and the docs are in, and the local checks pass.
-- Left: the PR's preview and CI, review, and the first `copy-packages.yml` run after merge.
-- Every placement is decided (Misha, 2026-10-02). Kit already left for iterate/kit
-  (iterate/iterate#3511).
-- Same size and shape as iterate/iterate#3487 (`mkdir core && mv apps/os core`): a scripted path
-  rewrite plus a few hand-written changes.
+- Done, pending merge: iterate/iterate#3512. CI is green, including the preview deploying every
+  moved app from its new folder; the AI linter had no findings and Bugbot one (a repeated
+  explanation, fixed).
+- Left for after merge: each app's first deploy from `packages/`, and the first
+  `copy-packages.yml` run.
 - When it merges, tell the "Iterate repo privatization status" session
   (`local_f9dad892-5f7e-44be-bd4c-916be3847685`): iterate/private's draft root commit lists the
   `apps/` and `packages/` layout.
@@ -158,3 +156,6 @@ Either way the copy no longer waits for a production deploy, so "after each prod
 - 2026-10-02: moved and checked locally: `pnpm typecheck`, `pnpm lint`, `pnpm knip`, `pnpm format`;
   the lint workspace's tests (74); the scripts workspace's tests, whose only failures are
   `toolchain` and `tracing` (macOS bash, as on main); agents-app's and voice-app's tests.
+- 2026-10-02: PR CI green on `2fb923406`. Bugbot flagged `copy-packages.yml`'s header for
+  repeating `copybara.ts`'s explanation of when each copy runs (rules/comments/no-repeated-explanations);
+  the header now points there.

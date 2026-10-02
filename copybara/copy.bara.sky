@@ -4,7 +4,7 @@
 #   core       iterate/core: core/, and the root files it needs to install and build. After every
 #              production deploy (Deploy OS).
 #   packages   iterate/packages: packages/ and the project templates in configs/. After every change
-#              to them on main (copy-packages.yml): the apps in packages/ deploy on their own.
+#              to them on main (copy-packages.yml).
 #
 # Each copy keeps this repo's paths, so a path means the same file in both. `copybara/<name>/` holds
 # the files that exist only at that copy's root (its README, and for core its package.json,
