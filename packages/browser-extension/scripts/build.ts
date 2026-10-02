@@ -13,13 +13,9 @@ cpSync(new URL("../../spa/public/oauth.js", import.meta.url), new URL("oauth.js"
 // public/manifest.json's `key` is a placeholder, which Chrome would refuse. A real key fixes the
 // extension's id, and so its sign-in redirect (`https://<id>.chromiumapp.org/`), on every install:
 // the zip the SPA serves has iterate's, from envs.ts (packages/spa/scripts/deploy.ts sets
-// CHROME_EXTENSION_KEY). Without one the key is left out and Chrome derives the id from the unpacked
+// CHROME_EXTENSION_KEY). Without one the key is removed and Chrome derives the id from the unpacked
 // folder's path; sign-in still works, as panel.js registers its redirect with the issuer.
-const { key: _placeholder, ...manifest } = JSON.parse(
-  readFileSync(new URL("manifest.json", dist), "utf8"),
-);
-const key = process.env.CHROME_EXTENSION_KEY;
-writeFileSync(
-  new URL("manifest.json", dist),
-  `${JSON.stringify(key ? { ...manifest, key } : manifest, null, 2)}\n`,
-);
+const manifestPath = new URL("manifest.json", dist);
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+manifest.key = process.env.CHROME_EXTENSION_KEY || undefined;
+writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
