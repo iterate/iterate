@@ -1,8 +1,5 @@
-# THE PUBLIC COPY OF PACKAGES: scripts/ci/copybara.ts `sync --copy packages`
-# (tasks/complete/2026-10-01-core-public-copy.md), after every change to what iterate/packages holds.
-# Not after a deploy, as iterate/core is (deploy-os.yml): the apps in packages/ deploy from workflows
-# of their own, and one workflow keeps the copy's pushes in order. A failed run pages nobody; the
-# next one catches up.
+# THE PUBLIC COPY OF PACKAGES: scripts/ci/copybara.ts `sync --copy packages`, whose header says when
+# each copy runs and why. A failed run pages nobody; the next one catches up.
 name: Copy to iterate/packages
 permissions:
   contents: read

@@ -1,6 +1,6 @@
 // library-connectors.e2e.test.ts — THE LIBRARY end to end: `itx.connectToMcp`, `itx.connectToOpenApi`,
 // `itx.connectToCapnweb`, through the client context's own egress. The pet-shop rows reach a REAL third
-// party (apps/dummy-petshop — https://dummy-petshop.iterate.workers.dev, or PETSHOP_BASE_URL): its MCP
+// party (internal-packages/dummy-petshop — https://dummy-petshop.iterate.workers.dev, or PETSHOP_BASE_URL): its MCP
 // server at /mcp, its OpenAPI document at /openapi.json (served REST-shaped under /api/v2), its capnweb
 // endpoint at /capnweb (batch and WebSocket); every endpoint takes the shop's ordinary bearer in the Authorization
 // header, minted the cheapest way the shop offers (legacy login, any email + the fixture password) and

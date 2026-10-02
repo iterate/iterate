@@ -8,10 +8,11 @@
 //
 // `sync` copies this repository's commits up to `sha` into one copy's main, then checks the copy
 // holds exactly that commit's files, and that a fresh clone of iterate/core passes the self-host
-// recipe. Deploy OS copies core after a production deploy; copy-packages.yml copies packages after
-// every change to them, since the apps in packages/ deploy from workflows of their own. It pushes as the iterate GitHub App, with
-// a token for the two copies and this repository, which it reads them from (getRepo: iterate/iterate,
-// then iterate/private). A copy that is empty, or whose last copied commit this repository doesn't
+// recipe. Deploy OS copies core after a production deploy. copy-packages.yml copies packages after
+// every change to them on main: the apps in packages/ deploy from workflows of their own, and one
+// workflow keeps the copy's pushes in order. It pushes as the iterate GitHub App, with a token for
+// that copy and this repository, which it reads from (getRepo: iterate/iterate, then
+// iterate/private). A copy that is empty, or whose last copied commit this repository doesn't
 // have (iterate/private starts with a fresh history), starts again from one snapshot of that commit.
 // Each copy's rulesets refuse every other push, an org admin's too
 // (`gh api repos/iterate/core/rulesets`), and secret scanning with push protection is on.

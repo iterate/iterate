@@ -126,13 +126,13 @@ export default {
         },
       ]),
     ),
-    "apps/dummy-petshop": {
+    "internal-packages/dummy-petshop": {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
       // `cloudflare:workers` parses as the "cloudflare" package.
       ignoreDependencies: ["cloudflare"],
     },
-    "apps/ci-reports": {
+    "internal-packages/ci-reports": {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },

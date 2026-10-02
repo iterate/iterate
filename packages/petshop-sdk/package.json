@@ -1,7 +1,7 @@
 {
   "name": "@iterate-com/petshop-sdk",
   "version": "0.1.0",
-  "description": "A vendor SDK for the dummy pet shop (apps/dummy-petshop): its capnweb pets API, typed",
+  "description": "A vendor SDK for the dummy pet shop (internal-packages/dummy-petshop): its capnweb pets API, typed",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

@@ -23,7 +23,7 @@ import type { Env } from "../../../core/os/src/env.ts";
 import { receiveEmail } from "../../../core/os/src/integrations/email.ts";
 import type { IterateContextDurableObject } from "../../../core/os/src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
-import { memoryPetshop } from "../../../apps/dummy-petshop/src/memory-state.ts";
+import { memoryPetshop } from "../../../internal-packages/dummy-petshop/src/memory-state.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../core/os/src/project/context-birth-events.ts";
 
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */

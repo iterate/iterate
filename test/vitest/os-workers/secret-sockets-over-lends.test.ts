@@ -2,7 +2,7 @@
 // every hop a use can take: a project's own secret, and the deployment's secret LENT to the project
 // by its operator — the same one-token pointer a person's account connected to a project is (the
 // dialler's context → the borrowed path's context and its facet → the lender's context and its facet
-// → the upstream). Two auth shapes, the two the pet shop's gateways model (apps/dummy-petshop
+// → the upstream). Two auth shapes, the two the pet shop's gateways model (internal-packages/dummy-petshop
 // src/gateway.ts): the OpenAI-Realtime shape (`/gateway-header`, the bearer on the UPGRADE) and the
 // Discord shape (`/gateway`, no auth on the upgrade — the token rides INSIDE the first client frame,
 // IDENTIFY `{"op":2,"d":{"token":…}}`).

@@ -12,9 +12,10 @@ opens a project, and rename. (Notes has no sign-in of its own: a project's confi
 
 The app goes in `packages/<app>`, which is public: iterate/packages copies it. The folder is the
 package's name without `@iterate-com/` (`packages/docs-app` is `@iterate-com/docs-app`, beside Docs'
-library in `packages/docs`). An app we don't stand behind goes in a repo of its own instead.
+library in `packages/docs`). An internal tool or test fixture goes in `internal-packages/<app>`, which
+isn't copied, and an app we don't stand behind goes in a repo of its own.
 
-A plain Worker with no UI (such as `apps/dummy-petshop`) has a different shape. Copy that app
+A plain Worker with no UI (such as `internal-packages/dummy-petshop`) has a different shape. Copy that app
 instead.
 
 ## 1. The app

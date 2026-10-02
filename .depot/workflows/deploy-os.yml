@@ -111,10 +111,9 @@ jobs:
           UPLOADED: ${{ steps.deploy.outcome }}
         run: node scripts/ci/notify.ts deploy-failure
 
-  # THE PUBLIC COPY OF CORE, once this commit deployed: scripts/ci/copybara.ts `sync`
-  # (tasks/complete/2026-10-01-core-public-copy.md; copy-packages.yml makes iterate/packages). A job
-  # of its own, so a failed copy shows red here but never touches the deploy or its posts, and pages
-  # nobody; the next deploy catches up.
+  # THE PUBLIC COPY OF CORE, once this commit deployed: scripts/ci/copybara.ts `sync`. A job of its
+  # own, so a failed copy shows red here but never touches the deploy or its posts, and pages nobody;
+  # the next deploy catches up.
   copybara:
     name: Copy to iterate/core
     needs: deploy

@@ -1,5 +1,5 @@
 /**
- * Shared primitives for the deploy and ensure-resources scripts under apps/ and core/os.
+ * Shared primitives for the deploy and ensure-resources scripts under packages/, internal-packages/ and core/os.
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke

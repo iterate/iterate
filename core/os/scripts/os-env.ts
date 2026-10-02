@@ -69,7 +69,7 @@ export const OsEnv = z.object({
    *  `login.testEmailDomain`): the pet shop's fake sign-ins admit addresses under it alone, and a
    *  PR body's sign-in link pre-fills one of them for an admin. A per-commit deployment's only. */
   testEmailDomain: z.string().optional(),
-  /** The dummy pet shop's origin (apps/dummy-petshop), whose fakes are iterate's own Slack app,
+  /** The dummy pet shop's origin (internal-packages/dummy-petshop), whose fakes are iterate's own Slack app,
    *  Google, X and Cloudflare OAuth clients and GitHub App (./preview-*-app.ts, at this origin), and
    *  people sign in with Google, Cloudflare and GitHub through them. A per-commit deployment's only:
    *  prd's and main on dev's integrations are their Doppler `APP_CONFIG`'s. */

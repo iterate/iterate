@@ -104,8 +104,8 @@ const deployedFolders: Record<string, string> = {
   notes: "packages/notes",
   spa: "packages/spa",
   voice: "packages/voice-app",
-  "ci-reports": "apps/ci-reports",
-  "dummy-petshop": "apps/dummy-petshop",
+  "ci-reports": "internal-packages/ci-reports",
+  "dummy-petshop": "internal-packages/dummy-petshop",
 };
 const deploymentWorkflows = depotWorkflowFiles.flatMap((file) => {
   const app = /^\.depot\/workflows\/deploy-(.+)\.yml$/.exec(file)?.[1];

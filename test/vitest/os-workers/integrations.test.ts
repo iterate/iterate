@@ -9,7 +9,7 @@ import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { IntegrationProvider, IterateContextApi } from "iterate/api";
 import type { StreamEvent } from "iterate/stream/processor";
-import { fakeUserIdOf } from "../../../apps/dummy-petshop/src/state.ts";
+import { fakeUserIdOf } from "../../../internal-packages/dummy-petshop/src/state.ts";
 import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
 import type { IntegrationScope } from "../../../core/os/src/integrations/connections.ts";
 import { acceptGithubCallback, connectGithub } from "../../../core/os/src/integrations/github.ts";

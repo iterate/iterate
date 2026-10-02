@@ -232,95 +232,6 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
 
-  apps/ci-reports:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@zip.js/zip.js':
-        specifier: 2.18.2
-        version: 2.18.2
-      iterate:
-        specifier: workspace:*
-        version: link:../../core/lib
-      mime:
-        specifier: 4.1.0
-        version: 4.1.0
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-    devDependencies:
-      '@cloudflare/vite-plugin':
-        specifier: 'catalog:'
-        version: 1.62.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1))
-      '@cloudflare/workers-types':
-        specifier: 'catalog:'
-        version: 5.20260929.1
-      fflate:
-        specifier: 'catalog:'
-        version: 0.8.3
-      trpc-cli:
-        specifier: 'catalog:'
-        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vite:
-        specifier: 'catalog:'
-        version: 8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
-      wrangler:
-        specifier: 4.143.1
-        version: 4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1)
-
-  apps/dummy-petshop:
-    dependencies:
-      '@modelcontextprotocol/server':
-        specifier: 'catalog:'
-        version: 2.1.0
-      '@orpc/openapi':
-        specifier: 1.15.4
-        version: 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
-      '@orpc/server':
-        specifier: 'catalog:'
-        version: 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
-      '@orpc/zod':
-        specifier: 1.15.4
-        version: 1.15.4(@opentelemetry/api@1.9.0)(@orpc/contract@1.15.4(@opentelemetry/api@1.9.0))(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(crossws@0.4.4)(ws@8.21.3)(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
-      capnweb:
-        specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
-      dedent:
-        specifier: ^1.7.0
-        version: 1.7.2
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-    devDependencies:
-      '@cloudflare/vite-plugin':
-        specifier: 'catalog:'
-        version: 1.62.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1))
-      '@cloudflare/workers-types':
-        specifier: 'catalog:'
-        version: 5.20260929.1
-      trpc-cli:
-        specifier: 'catalog:'
-        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vite:
-        specifier: 'catalog:'
-        version: 8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
-      wrangler:
-        specifier: 4.143.1
-        version: 4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1)
-
   core/lib:
     dependencies:
       capnweb:
@@ -469,6 +380,95 @@ importers:
       shadcn:
         specifier: 'catalog:'
         version: 4.21.0(typescript@7.0.2)
+      trpc-cli:
+        specifier: 'catalog:'
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
+      wrangler:
+        specifier: 4.143.1
+        version: 4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1)
+
+  internal-packages/ci-reports:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@zip.js/zip.js':
+        specifier: 2.18.2
+        version: 2.18.2
+      iterate:
+        specifier: workspace:*
+        version: link:../../core/lib
+      mime:
+        specifier: 4.1.0
+        version: 4.1.0
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: 'catalog:'
+        version: 1.62.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1))
+      '@cloudflare/workers-types':
+        specifier: 'catalog:'
+        version: 5.20260929.1
+      fflate:
+        specifier: 'catalog:'
+        version: 0.8.3
+      trpc-cli:
+        specifier: 'catalog:'
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
+      wrangler:
+        specifier: 4.143.1
+        version: 4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1)
+
+  internal-packages/dummy-petshop:
+    dependencies:
+      '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.1.0
+      '@orpc/openapi':
+        specifier: 1.15.4
+        version: 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
+      '@orpc/server':
+        specifier: 'catalog:'
+        version: 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
+      '@orpc/zod':
+        specifier: 1.15.4
+        version: 1.15.4(@opentelemetry/api@1.9.0)(@orpc/contract@1.15.4(@opentelemetry/api@1.9.0))(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(crossws@0.4.4)(ws@8.21.3)(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      capnweb:
+        specifier: 'catalog:'
+        version: '@iterate-com/capnweb@0.12.3'
+      dedent:
+        specifier: ^1.7.0
+        version: 1.7.2
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: 'catalog:'
+        version: 1.62.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1))
+      '@cloudflare/workers-types':
+        specifier: 'catalog:'
+        version: 5.20260929.1
       trpc-cli:
         specifier: 'catalog:'
         version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))

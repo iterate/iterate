@@ -1,4 +1,4 @@
-// helpers/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
+// helpers/petshop.ts — the deployed dummy-petshop (internal-packages/dummy-petshop), the fake third party the
 // secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
 // session-login endpoint (a `NewSession` mutation), a Tesco-shaped two-step login (a CSRF
 // token and its cookie, then the form), one bearer-protected pets API, GitHub-App style signed
@@ -6,7 +6,7 @@
 // webhooks. The worker under test fetches it directly (the local worker over the real network, the
 // deployed worker from the edge); nothing here proxies for it.
 
-/** The deployed fixture (apps/dummy-petshop) — `PETSHOP_BASE_URL` picks another. */
+/** The deployed fixture (internal-packages/dummy-petshop) — `PETSHOP_BASE_URL` picks another. */
 export const petshopBaseUrl = (): string =>
   (process.env.PETSHOP_BASE_URL?.trim() || "https://dummy-petshop.iterate.workers.dev").replace(
     /\/$/,
@@ -62,7 +62,7 @@ export const petshopExpireGraphqlSessions = (username: string) =>
   petshopExpireTokens("graphql-session-login", username);
 
 /** Revoke `email`'s Tesco-login tokens: they belong to the client `tesco-login`, the email their
- *  account (apps/dummy-petshop/src/tesco-login.ts). */
+ *  account (internal-packages/dummy-petshop/src/tesco-login.ts). */
 export const petshopExpireTescoTokens = (email: string) =>
   petshopExpireTokens("tesco-login", email);
 
@@ -211,7 +211,7 @@ export async function petshopConnect(
   return { accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
 }
 
-/** The shop's Slack fake (apps/dummy-petshop/src/slack.ts) POSTs `event` to `url` signed the way
+/** The shop's Slack fake (internal-packages/dummy-petshop/src/slack.ts) POSTs `event` to `url` signed the way
  *  Slack signs (`x-slack-signature: v0=<hex HMAC of "v0:<ts>:<body>">` under `signingSecret`, or
  *  another key with `badSignature`). Answers the receiver's status and JSON body. */
 export const petshopSlackFireWebhook = (input: {
@@ -232,7 +232,7 @@ export const petshopSlackMessages = (
 ): Promise<{ messages: { channel: string; text: string }[] }> =>
   petshopJson(`/__test-controls/slack/messages?team=${encodeURIComponent(teamId)}`);
 
-/** Register a GitHub App installation with the shop's GitHub fake (apps/dummy-petshop/src/github.ts):
+/** Register a GitHub App installation with the shop's GitHub fake (internal-packages/dummy-petshop/src/github.ts):
  *  the App's PUBLIC key (installation tokens are minted from an App JWT it verifies), its webhook
  *  secret, where the install redirects (the App's Callback URL), the organization it is on, and the
  *  user who administers it. */

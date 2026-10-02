@@ -3,7 +3,7 @@
 // that installs it imports no deploy tooling.
 
 /** A PREVIEW'S GITHUB APP — APP_CONFIG `integrations.github` for every per-PR preview, but its key:
- *  the pet shop's GitHub fake (apps/dummy-petshop/src/github.ts), which serves github.com's and
+ *  the pet shop's GitHub fake (internal-packages/dummy-petshop/src/github.ts), which serves github.com's and
  *  api.github.com's paths at its deployed origin (`githubOrigin`, the deployment's `petshopOrigin`:
  *  ./deploy.ts), and its seeded OAuth client. Fake
  *  credentials for a fake service, so they live here in code like the admin issuer; the App's

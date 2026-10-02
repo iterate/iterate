@@ -16,7 +16,7 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
   belongs in core/os when only the platform's Worker runs it, and in packages/shared when more
   than one app needs it and user code never does.
 - Outside core/os, no package and no app imports core/os. `import-js/no-restricted-paths` in
-  `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
+  `.oxlintrc.json` resolves each import under `packages/**` and `internal-packages/**` to a file, so type
   imports, re-exports, dynamic `import()` and an app added later are covered, and
   `lint/oxlintrc-platform-line.test.ts` pins it. The platform's tests live in `test/`, which
   the rule does not cover: they may import core/os, and core/os keeps only simple unit tests.

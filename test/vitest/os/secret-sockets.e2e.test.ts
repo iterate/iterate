@@ -1,5 +1,5 @@
 // secret-sockets.e2e.test.ts — OUTBOUND WEBSOCKETS THROUGH A SECRET on a deployed worker, against the
-// deployed pet shop's gateways (apps/dummy-petshop src/gateway.ts), which validate a real sealed
+// deployed pet shop's gateways (internal-packages/dummy-petshop src/gateway.ts), which validate a real sealed
 // token and close 4001 on anything else. Loaded code dials with its plain `fetch` (its context's
 // egress), `https://` plus `Upgrade: websocket` — workerd's fetch refuses a `wss://` URL. Two auth
 // shapes: the OpenAI-Realtime one (`/gateway-header`, the bearer on the UPGRADE, substituted like
