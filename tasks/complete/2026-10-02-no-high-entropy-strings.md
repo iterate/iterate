@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -7,8 +7,10 @@ size: medium
 
 ## Status
 
-- Swept (results below), decisions made (Misha, 2026-10-02). Implementing.
-- Left: the check, then the fixes it asks for.
+- Done: the check is a test in `lint/public-copies.test.ts`, and the tree passes it.
+- The two real ids are gone (unused KV ids), the extension key moved to `envs.ts`, and test fixtures
+  are obvious fakes. Four strings stay, each under an `allow-high-entropy-next-line` marker.
+- Left: nothing.
 
 ## Why
 
@@ -19,8 +21,8 @@ folders we hard-code non-secret ids like the Cloudflare account id on purpose.
 
 ## Decisions (Misha, 2026-10-02)
 
-- **A `lint/` vitest test, not an oxlint rule and no ESLint.** oxlint lints only `js mjs cjs jsx ts
-mts cts tsx` (and `<script>` in vue/astro/svelte), hard-coded in oxc, with no custom parsers. The
+- **A `lint/` vitest test, not an oxlint rule and no ESLint.** oxlint lints only JS and TS files
+  (and `<script>` in vue, astro and svelte), a list hard-coded in oxc, with no custom parsers. The
   check has to read `.md`, `.json`, `.yaml` and the rest too. It's a new test in
   `lint/public-copies.test.ts`, which already defines what each copy holds (`publicCopies()`).
 - **Exemptions:** `copybara/core/pnpm-lock.yaml` by path (package checksums, not our ids). Anything
@@ -47,22 +49,33 @@ mts cts tsx` (and `<script>` in vue/astro/svelte), hard-coded in oxc, with no cu
 ## Checklist
 
 - [x] sweep the public folders _33 hits in 18 files outside the lockfile, see Results_
-- [ ] the check in `lint/public-copies.test.ts`, failing on today's tree
-- [ ] `core/os/wrangler.base.jsonc`: delete the two unused KV namespace ids
-- [ ] `packages/browser-extension/public/manifest.json` `key`: out of the public copy. It moves to
+- [x] the check in `lint/public-copies.test.ts`, failing on today's tree _28 hits before the fixes_
+- [x] `core/os/wrangler.base.jsonc`: delete the two unused KV namespace ids _wrangler takes a KV
+      binding with no id (local `d1 migrations apply -c wrangler.base.jsonc` clean, no warning);
+      the Workers suite's oauth and personal-access-tokens tests pass_
+- [x] `packages/browser-extension/public/manifest.json` `key`: out of the public copy. _`envs.ts`
+      `CHROME_EXTENSION_KEY`, `scripts/build.ts` adds it; built both ways, same key as before_ It moves to
       `envs.ts` `spaEnvs`, and the extension's build adds it to `dist/manifest.json` when
       `CHROME_EXTENSION_KEY` is set (the SPA deploy sets it). A fork's build has no key, so Chrome
       derives the id from the folder; sign-in still works, since the extension registers its
       redirect URI with the issuer at sign-in
-- [ ] `packages/voice/src/screen-font.ts`: the base64 on its own line under a marker
-- [ ] `core/os/src/repo/git-wire.test.ts`: input blob ids from `hashObject`, expected ids by their
-      first 7 hex digits, `"x".repeat(40)` where the value doesn't matter
-- [ ] made-up ids in tests: obvious fakes or short strings
-- [ ] `core/lib/README.md`: drop the blob link to the deleted decision record, keep
-      `iterate/iterate#3018`
-- [ ] base62 alphabet (`core/os/src/personal-access-token.ts`, its test): markers
-- [ ] long numbers: rewrite or mark
-- [ ] check the check: break a fixture back, see it fail
+- [x] `packages/voice/src/screen-font.ts`: the base64 on its own line under a marker _its own
+      const, `pressStart2pAsciiWoff2`, above the CSS_
+- [x] `core/os/src/repo/git-wire.test.ts`: input blob ids from `hashObject`, expected ids by their
+      first 7 hex digits, `"x".repeat(40)` where the value doesn't matter _`threeFiles()` at the
+      bottom; `TIP` is `"d".repeat(40)`_
+- [x] made-up ids in tests: obvious fakes or short strings _the session cookie must be UUID-shaped
+      (`appSession`), so it's `00000000-0000-4000-8000-000000000001`; pkg.pr.new commits
+      `"a".repeat(40)`; `"acme-account-id"`, `"blob-sha"`, `"phc_FAKE"`_
+- [x] `core/lib/README.md`: drop the blob link to the deleted decision record, keep
+      `iterate/iterate#3018` _names the doc's path in that PR_
+- [x] base62 alphabet (`core/os/src/personal-access-token.ts`, its test): markers
+- [x] long numbers: rewrite or mark _only `call-client.test.ts`'s `20260928101112` is flagged
+      (marked); the round timestamps and `999…` pass the floor_
+- [x] check the check: break a fixture back, see it fail _planted ids in a README: random hex,
+      UUID, `phc_` key, base64 secret and 9-digit id flagged; zero UUID, `"0".repeat(40)`,
+      `1700000000`, a marked UUID and a URL passed_
+- [x] `core/AGENTS.md`: one bullet pointing at the check
 
 ## Results (sweep, on `apps-into-packages`, same on main after #3512)
 
@@ -84,3 +97,17 @@ peer-suffix hex). The other 33:
 
 Not caught by any entropy check, and not secret: personal emails in
 `core/os/src/name-suggestions.test.ts`, the Google Form id in `core/os/public/setup-prompt.md`.
+
+## Implementation notes
+
+- First run flagged no long numbers: `/agents/voice/cli/20260928101112-` is a 33-char run the
+  base64 check rejected (no capitals), and rejected matches still blocked later checks. Now only a
+  reported string blocks later checks.
+- New hits the sweep's scope missed: `patches/*.patch` `index <sha>..<sha>` lines (skipped: pnpm's
+  ids of the npm files, the patched code is still read) and `phc_FAKE_replay_privacy_test` (a key
+  shape, flagged whatever its entropy, so the fixture is shortened).
+- How often a real random id slips under a floor (200k samples): 16 hex 0.15%, 32 hex and UUIDs 0%,
+  9 digits 4.5%, 12 digits 0.6%, 32-char base64 0.6%, 40-char 0.003%.
+- Checks run: `lint/` (75 tests), the changed files' own tests in core/lib, core/os, ai-linter,
+  voice and ui, `pnpm typecheck`, oxlint on the changed files, `pnpm knip`, and the Workers suite's
+  oauth and personal-access-tokens tests (after `pnpm os:build`).

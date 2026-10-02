@@ -22,6 +22,8 @@ export default async function deploy(options: { env: string }) {
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "packages/spa",
     async build(ctx) {
+      // ./build.ts runs the extension's build, which adds this key to the manifest it zips
+      process.env.CHROME_EXTENSION_KEY = ctx.env.chromeExtensionKey;
       await import("./build.ts");
       writeFileSync(
         new URL("../dist/wrangler.json", import.meta.url),

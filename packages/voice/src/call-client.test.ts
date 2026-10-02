@@ -13,6 +13,7 @@ test("a call opens /agents/voice/<client>/<UTC stamp>-<activation>, presses ther
 
   expect(call).toMatchObject({
     activation: expect.stringMatching(/^[0-9a-f]{32}$/),
+    // allow-high-entropy-next-line: the UTC stamp of the fake clock above
     streamPath: `/agents/voice/cli/20260928101112-${call.activation}`,
   });
   expect(root).toMatchObject({

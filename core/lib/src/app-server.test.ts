@@ -219,7 +219,7 @@ function login(path: string, scopes: string[]) {
   } as unknown as DurableObjectNamespace<BrowserSession>;
   return appAuth(
     new Request(`https://notes.example${path}`, {
-      headers: { cookie: "__Host-itx-session=0c9a1c4e-7d2b-4d7e-9a4a-1f3c5e7b9d21" },
+      headers: { cookie: "__Host-itx-session=00000000-0000-4000-8000-000000000001" },
     }),
     { sessions, issuer: ISSUER, resource: "http://127.0.0.1:1/api", api: () => new Response("") },
   );
@@ -246,7 +246,7 @@ function connected(path: string, init?: RequestInit) {
     new Request(`https://notes.example${path}`, {
       ...init,
       headers: {
-        cookie: "__Host-itx-session=0c9a1c4e-7d2b-4d7e-9a4a-1f3c5e7b9d21",
+        cookie: "__Host-itx-session=00000000-0000-4000-8000-000000000001",
         ...(init?.headers as Record<string, string>),
       },
     }),
