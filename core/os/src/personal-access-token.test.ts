@@ -7,7 +7,7 @@ import {
   parsePersonalAccessToken,
 } from "./personal-access-token.ts";
 
-const userId = `user_${"0".repeat(32)}`;
+const userId = "user_00000000000000000000000000000000";
 
 test("a new key: the scannable format, its id and user readable back, its SHA-256 the only thing kept", async () => {
   const { id, token, hash } = await newPersonalAccessToken(userId);

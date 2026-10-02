@@ -30,7 +30,7 @@ folders we hard-code non-secret ids like the Cloudflare account id on purpose.
   `allow-high-entropy-next-line: <why>`. A made-up `eslint-disable-next-line iterate/…` would fail
   oxlint's unused-directive check, so the marker is our own.
 - **Obvious test data passes.** UUIDs, hex and digit runs are flagged only above an entropy floor,
-  so `00000000-0000-4000-8000-000000000001`, `"0".repeat(40)` and `1700000000` pass, and a real id
+  so `00000000-0000-4000-8000-000000000001`, 40 zeros and `1700000000` pass, and a real id
   (or a sequential fake like `0123456789abcdef…`) doesn't.
 - **Keep the long-number check**, exempting the few that need to stay.
 
@@ -62,18 +62,18 @@ folders we hard-code non-secret ids like the Cloudflare account id on purpose.
 - [x] `packages/voice/src/screen-font.ts`: the base64 on its own line under a marker _its own
       const, `pressStart2pAsciiWoff2`, above the CSS_
 - [x] `core/os/src/repo/git-wire.test.ts`: input blob ids from `hashObject`, expected ids by their
-      first 7 hex digits, `"x".repeat(40)` where the value doesn't matter _`threeFiles()` at the
-      bottom; `TIP` is `"d".repeat(40)`_
+      first 7 hex digits, a run of one letter where the value doesn't matter _`threeFiles()` at
+      the bottom; `TIP` is 40 `d`s_
 - [x] made-up ids in tests: obvious fakes or short strings _the session cookie must be UUID-shaped
       (`appSession`), so it's `00000000-0000-4000-8000-000000000001`; pkg.pr.new commits
-      `"a".repeat(40)`; `"acme-account-id"`, `"blob-sha"`, `"phc_FAKE"`_
+      40 `a`s; `"acme-account-id"`, `"blob-sha"`, `"phc_FAKE"`_
 - [x] `core/lib/README.md`: drop the blob link to the deleted decision record, keep
       `iterate/iterate#3018` _names the doc's path in that PR_
 - [x] base62 alphabet (`core/os/src/personal-access-token.ts`, its test): markers
 - [x] long numbers: rewrite or mark _only `call-client.test.ts`'s `20260928101112` is flagged
       (marked); the round timestamps and `999…` pass the floor_
 - [x] check the check: break a fixture back, see it fail _planted ids in a README: random hex,
-      UUID, `phc_` key, base64 secret and 9-digit id flagged; zero UUID, `"0".repeat(40)`,
+      UUID, `phc_` key, base64 secret and 9-digit id flagged; zero UUID, 40 zeros,
       `1700000000`, a marked UUID and a URL passed_
 - [x] `core/AGENTS.md`: one bullet pointing at the check
 
@@ -111,3 +111,5 @@ Not caught by any entropy check, and not secret: personal emails in
 - Checks run: `lint/` (75 tests), the changed files' own tests in core/lib, core/os, ai-linter,
   voice and ui, `pnpm typecheck`, oxlint on the changed files, `pnpm knip`, and the Workers suite's
   oauth and personal-access-tokens tests (after `pnpm os:build`).
+- Fakes are hardcoded literals, not `.repeat()` calls (Misha, 2026-10-02): a run of one character
+  has 0 bits of entropy, so a literal of 40 `a`s passes the check.

@@ -62,7 +62,7 @@ test("a public copy names a PR or issue as owner/repo#N, never a bare #N", () =>
 
 // Nothing in a public copy looks like a key or an id: a UUID, a long hex, base64 or digit run, a
 // token's or a key's own shape. An account id or an analytics key belongs in iterate/private
-// (envs.ts), a secret in Doppler. Obvious test data passes, by entropy: `"0".repeat(40)`,
+// (envs.ts), a secret in Doppler. Obvious test data passes, by entropy: `aaaaaaaaaaaaaaaaaaaa`,
 // `00000000-0000-4000-8000-000000000001`, `1700000000`. A string that has to stay takes a line
 // above it saying `allow-high-entropy-next-line: <why>`, in the file's own comment syntax. The
 // copied lockfile's package checksums, and a patch's `index <blob>..<blob>` lines (git's ids of the
