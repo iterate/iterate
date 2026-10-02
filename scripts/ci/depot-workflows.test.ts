@@ -109,7 +109,7 @@ const workspaceDirectories = (
 // ── Depot deployment safety ──
 test("finds the production deploy workflows", () => {
   expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
-    expect.arrayContaining(["os", "dash", "agents", "notes", "docs", "voice", "kit", "spa"]),
+    expect.arrayContaining(["os", "dash", "agents", "notes", "docs", "voice", "spa"]),
   );
 });
 
@@ -206,13 +206,10 @@ test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
   },
 );
 
-test.each(["kit", "voice"])(
-  "deploy-%s.yml redeploys when the voice package changes: its voice check ships in the app",
-  (app) => {
-    const paths = loadWorkflow(`.depot/workflows/deploy-${app}.yml`).on?.push?.paths ?? [];
-    expect(triggers(paths, "packages/voice/src/install.ts")).toBe(true);
-  },
-);
+test("deploy-voice.yml redeploys when the voice package changes: its voice check ships in the app", () => {
+  const paths = loadWorkflow(".depot/workflows/deploy-voice.yml").on?.push?.paths ?? [];
+  expect(triggers(paths, "packages/voice/src/install.ts")).toBe(true);
+});
 
 test("deploy-spa.yml ignores the root manifests and lockfile: capnweb ships with the next deploy", () => {
   const paths = loadWorkflow(".depot/workflows/deploy-spa.yml").on?.push?.paths ?? [];
@@ -249,7 +246,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
   for (const file of [
     "core/os/README.md",
     "core/os/SELF-HOSTING.md",
-    "core/os/docs/project-seeds.md",
+    "core/os/docs/residency.md",
     "test/AGENTS.md",
     "test/helpers/client.ts",
     "core/os/src/project/templates.test.ts",
@@ -271,7 +268,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
 
 test.each(
   deploymentWorkflows.filter(({ app }) =>
-    ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"].includes(app),
+    ["os", "dash", "agents", "notes", "docs", "admin", "voice"].includes(app),
   ),
 )("$file posts the deploy's own result as the deploy job's last two steps", ({ file, app }) => {
   const workflow = loadWorkflow(file);
@@ -332,12 +329,6 @@ test("each PR event's line posts from a job with no concurrency; the dashboard's
 
 test.for([
   {
-    file: ".depot/workflows/kit-firmware.yml",
-    failed: "contains(needs.*.result, 'failure')",
-    // a run that plans no release skips build and publish, and proves nothing
-    green: "needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'",
-  },
-  {
     file: ".depot/workflows/os-crash-hunt.yml",
     failed: "needs.crash-hunt.result == 'failure'",
     green: "needs.crash-hunt.result == 'success'",
@@ -383,21 +374,6 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
       // the suites against a running system (test/AGENTS.md) run only here
       "test/**",
     ]),
-  );
-});
-
-// apps/kit/README.md "Firmware releases": the Kit Worker streams firmware from GitHub releases
-test("Kit deploys only the installer; firmware ships as GitHub releases", () => {
-  const workflow = loadWorkflow(".depot/workflows/deploy-kit.yml");
-  const deploy = workflow.jobs.deploy!;
-  const paths = workflow.on?.push?.paths || [];
-  const runs = (deploy.steps || []).map((step) => step.run || "");
-
-  expect(runs.filter((run) => /esp-idf|export\.sh|firmware:/i.test(run))).toEqual([]);
-  expect(triggers(paths, "apps/kit/firmware/targets/havpe/CMakeLists.txt")).toBe(false);
-  expect(triggers(paths, "apps/kit/src/firmware/catalog.ts")).toBe(true);
-  expect(paths).toEqual(
-    expect.arrayContaining(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "patches/**"]),
   );
 });
 
@@ -507,7 +483,7 @@ test.each([
     file: ".depot/workflows/preview-parents.yml",
     permissions: { contents: "read" },
   },
-  ...["os", "admin", "agents", "dash", "notes", "docs", "voice", "kit"].map((app) => ({
+  ...["os", "admin", "agents", "dash", "notes", "docs", "voice"].map((app) => ({
     file: `.depot/workflows/deploy-${app}.yml`,
     permissions: { contents: "read" },
   })),
@@ -532,84 +508,12 @@ test.each([
     permissions: { contents: "read" },
   },
   {
-    file: ".depot/workflows/kit-firmware.yml",
-    permissions: { contents: "read" },
-  },
-  {
     file: ".depot/workflows/health.yml",
     permissions: { contents: "read" },
   },
 ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra permission must fail
   expect(loadWorkflow(file).permissions).toEqual(permissions);
-});
-
-// The legs run the firmware's own CMake, third-party components and scripts; none of them may hold
-// a token that can create a release (apps/kit/scripts/firmware-release.ts).
-test("Kit Firmware publishes from one job that runs no repository code", () => {
-  const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
-  const writers = Object.entries(workflow.jobs).filter(
-    ([, job]) => job.permissions?.contents === "write",
-  );
-  const publish = workflow.jobs["publish-firmware"]!;
-  const checkouts = Object.values(workflow.jobs).flatMap((job) =>
-    (job.steps || []).filter((step) => step.uses?.startsWith("actions/checkout")),
-  );
-
-  expect(writers.map(([jobId]) => jobId)).toEqual(["publish-firmware"]);
-  expect(publish.steps?.filter((step) => step.uses?.startsWith("actions/checkout"))).toEqual([]);
-  expect(checkouts.length).toBeGreaterThan(0);
-  for (const checkout of checkouts) expect(checkout.with?.["persist-credentials"]).toBe(false);
-  // the daily vYYYY-… release stays the repository's Latest
-  expect(publish.steps?.map((step) => step.run || "").join("\n")).toContain("--latest=false");
-  expect(workflow.on?.push?.paths).toEqual(workflow.on?.pull_request?.paths);
-  // the schedule is the bounded recovery for a failed publish
-  expect(workflow.on?.schedule).toEqual([{ cron: expect.any(String) }]);
-});
-
-// A leg that installs ESP-IDF itself makes a GitHub clone and a PyPI install, any of whose
-// downloads can fail a board with no firmware change. So Depot Cache holds it, keyed by its pin
-// (scripts/ci/esp-idf.sh), and a main leg saves it, as installed, for a pin that has none yet.
-test("Kit Firmware legs take ESP-IDF from Depot Cache, keyed by its pin", () => {
-  const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
-  const leg = workflow.jobs["build-firmware"]!;
-  const steps = leg.steps || [];
-  const index = (name: string) => steps.findIndex((step) => step.name === name);
-  const paths = "/home/runner/esp-idf\n/home/runner/.espressif\n";
-
-  expect(leg["runs-on"]).toBe("depot-ubuntu-24.04-4");
-  // the pin's hash and python3's version (scripts/ci/esp-idf.test.ts)
-  expect(steps[index("ESP-IDF's key")]).toMatchObject({
-    id: "esp-idf-key",
-    run: 'scripts/ci/esp-idf.sh key >>"$GITHUB_OUTPUT"',
-  });
-  expect(steps[index("Restore ESP-IDF")]).toMatchObject({
-    id: "esp-idf",
-    uses: "actions/cache/restore@v4",
-    with: { path: paths, key: "${{ steps.esp-idf-key.outputs.key }}" },
-  });
-  // an older pin's ESP-IDF is of no use to this one
-  expect(steps[index("Restore ESP-IDF")]?.with?.["restore-keys"]).toBeUndefined();
-  expect(steps[index("ESP-IDF")]).toMatchObject({
-    id: "ensure",
-    run: "scripts/ci/esp-idf.sh ensure",
-  });
-  expect(steps[index("Save ESP-IDF")]).toMatchObject({
-    if: "${{ github.ref == 'refs/heads/main' && steps.ensure.outcome == 'success' && steps.esp-idf.outputs.cache-hit != 'true' }}",
-    uses: "actions/cache/save@v4",
-    with: { path: paths },
-  });
-  expect(index("ESP-IDF's key")).toBe(index("Restore ESP-IDF") - 1);
-  expect(index("Restore ESP-IDF")).toBeLessThan(index("ESP-IDF"));
-  expect(index("Save ESP-IDF")).toBe(index("ESP-IDF") + 1);
-  expect(index("Save ESP-IDF")).toBeLessThan(index("Build"));
-  expect(
-    steps.map((step) => step.run || "").filter((run) => /git clone|install\.sh/.test(run)),
-  ).toEqual([]);
-  // the push's paths equal these (the publish test above)
-  expect(workflow.on?.pull_request?.paths).toEqual(
-    expect.arrayContaining(["scripts/ci/esp-idf.sh", "scripts/ci/toolchain.sh"]),
-  );
 });
 
 test("release.yml never takes a kit-firmware tag for the last release", () => {
@@ -907,7 +811,6 @@ test("only main writes Depot Cache, main restores exact keys, and no production 
       );
   }
   expect(saves.map(({ name }) => name).toSorted()).toEqual([
-    ".depot/workflows/kit-firmware.yml build-firmware: Save ESP-IDF",
     // one definition, which saves in the first specs shard alone (`env.SPECS_SHARD == '1'`)
     ".depot/workflows/main-os-e2e.yml e2e: Save Playwright's browser",
     ".depot/workflows/main-os-e2e.yml specs-shard: Save Playwright's browser",
@@ -1254,15 +1157,12 @@ test("Main OS e2e's suite jobs are one definition, a PR preview's suite steps on
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
-// only runs on its schedule carries that job as a skipped check. Two workflows run the same jobs
-// on every trigger: Kit Firmware, whose daily run re-plans every board so a failed publish is
-// repaired without a firmware push, and the real-model suite, which runs a main push to the agents
-// runtime as it runs main daily.
+// only runs on its schedule carries that job as a skipped check. One workflow runs the same jobs
+// on every trigger: the real-model suite, which runs a main push to the agents runtime as it runs
+// main daily.
 test.for(
   depotWorkflowFiles.filter(
-    (file) =>
-      loadWorkflow(file).on?.schedule &&
-      ![".depot/workflows/kit-firmware.yml", ".depot/workflows/os-real-model.yml"].includes(file),
+    (file) => loadWorkflow(file).on?.schedule && file !== ".depot/workflows/os-real-model.yml",
   ),
 )("%s runs only on its schedule or on request", (file) => {
   expect(
@@ -1272,12 +1172,9 @@ test.for(
   ).toEqual([]);
 });
 
-test("runs every workspace test script, then Kit's firmware host tests", () => {
+test("runs every workspace test script", () => {
   const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps ?? [];
   const runTests = steps.findIndex((step) => step.name === "Run Tests");
-  const firmwareHostTests = steps.findIndex(
-    (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
-  );
 
   // core/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
   // script builds it beside another's
@@ -1285,11 +1182,6 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();
-  // The host tests need cmake, so they stay out of `pnpm test` (which then runs on any machine)
-  // and keep their place in the required Test check as a step of their own.
-  expect(readPackageJson("apps/kit").scripts?.test).not.toContain("firmware:test:host");
-  expect(firmwareHostTests).toBeGreaterThan(runTests);
-  expect(steps[firmwareHostTests]?.if).toBe("${{ !cancelled() }}");
 });
 
 test("the Lint check runs the root lint script that local runs use", () => {
@@ -1410,7 +1302,7 @@ test.each([
 // docs/test-evidence.md: each test job attempt's test-results/ folder, its manifest and its upload
 // to R2.
 test.each([
-  { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
+  { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests"] },
   // the suite jobs' one step, `suite`, recorded under the suite its job names
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
   {
@@ -1453,7 +1345,7 @@ test.each([
     expect(write?.run?.includes("--only-with-target")).toBe(file !== ".depot/workflows/test.yml");
     expect(write?.["continue-on-error"]).toBeUndefined();
     // the outcome of every step that runs tests, each one before the write, so a failure the
-    // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
+    // telemetry does not see (a runner that never started) is not a pass
     expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
       testSteps.map((id, i) => `${as?.[i] ?? id}=\${{ steps.${id}.outcome }}`).join(" "),
     );
@@ -1638,31 +1530,15 @@ test("the fallback report names a failed evidence step that did not report itsel
   expect(report("success", "failure")).toEqual({ status: 0, stdout: "", summary: "" });
 });
 
-test("Kit's host tests write CTest's JUnit XML into the test evidence folder", () => {
-  const kit = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
-    (step) => step.id === "kit-host-tests",
-  );
-  expect(kit?.run).toContain(
-    `pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/${testEvidencePaths.ctestJunit}"`,
-  );
-  expect(kit?.run).toContain(`mkdir -p ${dirname(testEvidencePaths.ctestJunit)}`);
-});
-
-// Kit's scheduling beside `pnpm test`, as .depot/workflows/test.yml explains it.
-test("the Test job runs Kit's host tests beside pnpm test, neither cancelling the other", () => {
+// The Test job's tests run beside the evidence upload's Doppler fetch, which needs nothing of them.
+test("the Test job fetches the evidence upload's secrets beside pnpm test, neither cancelling the other", () => {
   const steps = readWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
   const block = steps.find((step) => step.parallel?.some((inner) => inner.id === "tests"));
   expect(block?.["fail-fast"]).toBe(false);
-  // and the evidence upload's Doppler fetch, which needs nothing of either
   expect(block?.parallel?.map((step) => step.id || step.name)).toEqual([
     "tests",
-    "kit-host-tests",
     "Fetch the evidence upload's secrets",
   ]);
-  expect(block?.parallel?.[1]).toMatchObject({
-    if: "${{ !cancelled() }}",
-    run: expect.stringContaining("nice -n 19 pnpm --dir apps/kit firmware:test:host"),
-  });
   expect(steps.indexOf(block!)).toBe(steps.findIndex((step) => step.id === "setup") + 1);
 });
 
@@ -1742,7 +1618,6 @@ test.for([
   { file: ".depot/workflows/lint-typecheck.yml", jobIds: ["lint-typecheck"] },
   { file: ".depot/workflows/loc-report.yml", jobIds: ["loc-report"] },
   { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["notify", "update_dashboard"] },
-  { file: ".depot/workflows/kit-firmware.yml", jobIds: ["plan-firmware", "build-firmware"] },
 ])(
   "$file checks out the run's own commit, the tree its workflow file was read from",
   ({ file, jobIds }) => {

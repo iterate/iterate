@@ -1,6 +1,6 @@
 // THE FLAKE DASHBOARD'S INPUT: the flake records and suite summaries that CI's test runs keep in
 // R2, in each run's test evidence folder (docs/test-evidence.md). ./update.ts reads the recent ones
-// every hour and ./dashboard.ts computes issue #2580 from them; nothing is kept between runs.
+// every hour and ./dashboard.ts computes the dashboard issue from them; nothing is kept between runs.
 //
 // A folder's flake records are `flake-records/<suite>/*.jsonl` beside that suite's
 // `suite-summary.json`: the Test job's `unit`, the e2e jobs' `preview-e2e` and `specs`. A folder

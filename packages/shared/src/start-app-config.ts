@@ -1,9 +1,9 @@
 // start-app-config.ts — THE CONFIGURATION OF AN APP ON TOP of the platform: dash, agents, notes,
-// docs, admin, voice and kit, TanStack Start apps that are each an OAuth client of core/os and nothing
+// docs, admin and voice, TanStack Start apps that are each an OAuth client of core/os and nothing
 // else — but notes and docs, which a project's config worker serves under its hosts, on the host's sign-in. The platform's mechanism (app-config.ts): one `APP_CONFIG` object, and any key set alone
 // as an `APP_CONFIG_*` var merged on top.
 //
-//   { urls: { os, dash, agents, notes, docs, admin, voice, kit }, denyZones, posthogProjectKey, pkgPrNewRef }
+//   { urls: { os, dash, agents, notes, docs, admin, voice }, denyZones, posthogProjectKey, pkgPrNewRef }
 //
 // scripts/lib/start-app.ts writes it from envs.ts as the Worker's one `APP_CONFIG` var
 // (`startAppWorkerConfig`), and a per-PR preview swaps in the same PR's origins
@@ -23,12 +23,12 @@ export const StartAppConfig = z.object({
   urls: z
     .object({
       /** THE PLATFORM this app signs in against (core/os): the default issuer, and `/api` on it the
-       *  resource. Kit can also sign a device in to another platform a link names (device-auth.ts). */
+       *  resource. */
       os: httpOrigin,
       // THE FIRST-PARTY APPS, what a link from one app to another follows: the dash's directory of
-      // apps (apps/dash/src/apps.ts), Kit's link to the sessions in the dash, the admin app's "View
-      // dash as". The same environment's as `os`. Blank ⇒ no link: a per-PR preview names only the
-      // apps its run deploys, because production does not know the preview's projects.
+      // apps (apps/dash/src/apps.ts), the admin app's "View dash as". The same environment's as
+      // `os`. Blank ⇒ no link: a per-PR preview names only the apps its run deploys, because
+      // production does not know the preview's projects.
       dash: optionalOrigin,
       agents: optionalOrigin,
       /** read by no app: nothing links to Notes, which is served under each project's hosts. It
@@ -39,7 +39,6 @@ export const StartAppConfig = z.object({
       docs: optionalOrigin,
       admin: optionalOrigin,
       voice: optionalOrigin,
-      kit: optionalOrigin,
     })
     // the prefault must satisfy the input type; `os: ""` then fails naming urls.os
     .prefault({ os: "" }),

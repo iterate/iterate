@@ -33,39 +33,23 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
-/** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
- *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
- *  Cloudflare resources. */
-export interface KitEnv {
-  cloudflareAccountId: string;
-  /** Doppler config (project `kit`) supplying deploy credentials. */
-  dopplerConfig: string;
-  workerName: string;
-  baseUrl: string;
-  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`), as every Start app's. Unset ⇒ no PostHog. */
-  posthogProjectKey?: string;
-}
-
-export const kitEnvs = {
-  // KIT AT MAIN on the dev/preview account, signed in against osEnvs.preview and
-  // redeployed in place with it (preview-parents.yml). A PR's kit is its own worker (`previewDeployment`). Every kit lists and
-  // flashes the same GitHub releases as production (apps/kit/src/firmware/releases.ts).
+/** KIT, the voice boards' firmware and their browser installer, deployed from its own repository,
+ *  iterate/kit (its envs.ts), never from here. Its Workers are listed so this repository's tooling
+ *  knows them: their origins are our own zones (scripts/lib/start-app.ts `ownZones`), the prd fault
+ *  alarm watches `kiterate`, and the preview sweep counts `kit` as known. */
+export const kitWorkers = {
+  // Kit at iterate/kit's main, signed in against osEnvs.preview
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    dopplerConfig: "preview",
     workerName: "kit",
     baseUrl: "https://kit.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
-    dopplerConfig: "prd",
-    // The production account's workers.dev subdomain is `iterate`, making
-    // this worker available at kiterate.iterate.workers.dev as well.
     workerName: "kiterate",
     baseUrl: "https://k.iterate.com",
-    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
   },
-} satisfies Record<string, KitEnv>;
+};
 
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
@@ -90,6 +74,22 @@ export const osEnvs: Record<string, OsEnv> = {
       dbId: "0189bd9e-baa4-48f5-b39c-f57b8829d864",
     },
   },
+  // PRODUCTION, and what it needs that is set up by hand outside this file:
+  // - the identity providers' callbacks, registered before a hostname cutover:
+  //   `<baseUrl>/.auth/identity/callback` (Google), `/.auth/identity/cloudflare/callback` and
+  //   `/.auth/identity/github/callback`;
+  // - Doppler os/prd's `APP_CONFIG` email-code sender, on a verified Iterate sending domain;
+  // - iterate.app, for project ingress and the Cloudflare for SaaS fallback: a custom apex in
+  //   another account points at cname.iterate.app and needs an active hostname and certificate on
+  //   that zone. A project's email is `<slug>@iterate.app` (core/os/src/integrations/email.ts): the
+  //   zone is onboarded for Email Sending, and its Email Routing catch-all delivers every inbound
+  //   message to os-prd's `email()` handler;
+  // - iterate.com, also the `iterate` project's email domain: onboarded for Email Sending, so that
+  //   project sends from any iterate.com address, and its catch-all delivers to os-prd too, which
+  //   records each message on that project's `/integrations/email` and forwards it to
+  //   `projectWildcard.forwardEmailTo`. A proxied `*.iterate.com` DNS record and Worker route, with
+  //   an active `*.iterate.com` edge certificate, serve the project's config worker; named routes
+  //   (os., mcp., dash., k.iterate.com …) take precedence.
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
@@ -271,7 +271,6 @@ export const PREVIEW_DEPLOYMENT_APPS = [
   "docs",
   "admin",
   "voice",
-  "kit",
 ] as const;
 
 /** `<prefix>-<sha7>`: a prefix of lowercase words (`pr3144`, `main`, `real-model`), at most 28

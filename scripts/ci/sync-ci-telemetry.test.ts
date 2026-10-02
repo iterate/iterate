@@ -406,7 +406,7 @@ function busyDepot(listing: { name: string } | { status: string[] }) {
   };
 }
 
-/** The window of the sync that failed on PR #3061's conflicting push. */
+/** The window of the sync that failed on PR iterate/iterate#3061's conflicting push. */
 const conflictWindow = {
   start: Date.parse("2026-09-25T11:24:34Z"),
   end: Date.parse("2026-09-25T12:24:34Z"),
@@ -420,7 +420,7 @@ function conflictDepot(runMetrics: object) {
   };
 }
 
-/** Depot's answers for run 37t76ps1gg, PR #3061's push of 23bebdc while it conflicted with main. */
+/** Depot's answers for run 37t76ps1gg, PR iterate/iterate#3061's push of 23bebdc while it conflicted with main. */
 const conflict = {
   listed: {
     workflowId: "b7k3d39qd2",

@@ -154,20 +154,20 @@ test("a job whose runners left nothing still gets a manifest, and it says incomp
 
 test.for([
   {
-    name: "a failed step whose failure no runner reported (Kit's CTest) fails the run",
-    steps: "tests=success kit-host-tests=failure",
+    name: "a failed step whose failure no runner reported fails the run",
+    steps: "tests=success other-tests=failure",
     check: completeCheck,
     result: "failed",
   },
   {
     name: "a runner the finalizer found missing makes the run incomplete, not failed",
-    steps: "tests=failure kit-host-tests=success",
+    steps: "tests=failure other-tests=success",
     check: { ...completeCheck, missingWorkspaces: ["@iterate-com/shared"] },
     result: "incomplete",
   },
   {
     name: "a cancelled job is cancelled, whatever ran",
-    steps: "tests=cancelled kit-host-tests=skipped",
+    steps: "tests=cancelled other-tests=skipped",
     check: completeCheck,
     cancelled: true,
     result: "cancelled",

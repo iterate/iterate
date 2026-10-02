@@ -5,7 +5,7 @@
 // `keepalive` every 20 s says the caller is still there through a quiet stretch, and hanging up
 // appends `call-ended`. apps/voice's page runs it with the browser's worklets and
 // apps/agents/scripts/voice-call.ts from Node with WAV files; Kit's firmware speaks the same calls
-// in C (apps/kit/firmware/components/voice/src/voice_loop.c).
+// in C (iterate/kit's firmware/components/voice/src/voice_loop.c).
 import { z } from "zod";
 import type { IterateContextApi } from "iterate/api";
 import type { VoiceApi } from "./api.ts";

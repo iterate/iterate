@@ -285,7 +285,7 @@ const hostIsDown = (status: number) => status === 421 || status >= 500 || status
 
 /** The version `/version` names once it is not `previousVersion`, polled every 5 s for up to 60 s:
  *  the smokes in the deploy step only read status codes, so the runner's edge may still serve the
- *  old version (which answered fine in #2888). Past 60 s, whatever it named last. */
+ *  old version (which answered fine in iterate/iterate#2888). Past 60 s, whatever it named last. */
 async function readNewVersion(previousVersion: string | undefined) {
   const deadline = Date.now() + 60_000;
   for (;;) {

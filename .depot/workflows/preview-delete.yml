@@ -36,7 +36,6 @@ on:
       - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
-      - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
       - core/os/**
       - core/configs/**
@@ -47,8 +46,6 @@ on:
       - apps/docs/**
       - apps/admin/**
       - apps/voice/**
-      - apps/kit/**
-      - "!apps/kit/firmware/**"
       - test/**
       - core/lib/**
       - packages/voice/**

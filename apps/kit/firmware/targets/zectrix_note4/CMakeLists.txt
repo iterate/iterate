@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.16)
-include(../common/components.cmake)
-list(APPEND EXTRA_COMPONENT_DIRS "${ITERATE_KIT_FIRMWARE_ROOT}/devices/zectrix_note4")
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(iterate-kit-zectrix-note4)

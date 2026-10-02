@@ -83,7 +83,6 @@ test("a deployment is derived from its name alone: eight plain workers on the de
       docs: "https://pr3144-a1b2c3d-docs.iterate-dev-preview.workers.dev",
       admin: "https://pr3144-a1b2c3d-admin.iterate-dev-preview.workers.dev",
       voice: "https://pr3144-a1b2c3d-voice.iterate-dev-preview.workers.dev",
-      kit: "https://pr3144-a1b2c3d-kit.iterate-dev-preview.workers.dev",
     },
   });
   // the envs.ts deployments, main on dev's workers and a bare prefix are none
@@ -91,7 +90,7 @@ test("a deployment is derived from its name alone: eight plain workers on the de
     expect(previewDeployment(name)).toBeUndefined();
 });
 
-test("the apps on top are the deployment's seven clients", () => {
+test("the apps on top are the deployment's six clients", () => {
   expect(APPS.map((app) => app.name).toSorted()).toEqual([...PREVIEW_DEPLOYMENT_APPS].toSorted());
 });
 
@@ -422,7 +421,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(() => getOsEnv("pr3144")).toThrow('core/os: unknown env "pr3144"');
 });
 
-// Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then
+// Preview OS deploys of iterate/iterate#2934, iterate/iterate#2939 and iterate/iterate#2943 (2026-09-24): the PR head's older lockfile, then
 // the merge commit's, rewrote pnpm-lock.yaml over node_modules baked from that same content.
 test("the fresh-install check: a lockfile rewritten after the install, byte-identical to the one installed, passes", () => {
   expect(

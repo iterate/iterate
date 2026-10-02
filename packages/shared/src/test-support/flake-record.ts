@@ -69,7 +69,7 @@ export interface RetriedTestTelemetry {
  * unexpected-error when every attempt failed. The hard failure needs its own
  * record because only a record opens a dashboard row and carries the error:
  * without it a test that failed every attempt on one main push and passed on
- * the next left no trace on #2580. Returns null for tests that passed first
+ * the next left no trace on the flake dashboard. Returns null for tests that passed first
  * time, did not finish (skipped, interrupted), and expected-fail registrations.
  */
 export function unknownFlakeRecordFromTelemetry(test: RetriedTestTelemetry): FlakeRecord | null {

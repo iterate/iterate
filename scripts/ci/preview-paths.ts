@@ -36,7 +36,6 @@ export const previewPaths = [
   ".depot/workflows/deploy-docs.yml",
   ".depot/workflows/deploy-admin.yml",
   ".depot/workflows/deploy-voice.yml",
-  ".depot/workflows/deploy-kit.yml",
   ".depot/workflows/preview-os.yml",
   "core/os/**",
   "core/configs/**",
@@ -47,9 +46,6 @@ export const previewPaths = [
   "apps/docs/**",
   "apps/admin/**",
   "apps/voice/**",
-  "apps/kit/**",
-  // Kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker.
-  "!apps/kit/firmware/**",
   // the suites that drive the preview: vitest's and Playwright's (test/AGENTS.md)
   "test/**",
   // the SDK, and the CLI that test/vitest/os/iterate-cli.e2e.test.ts drives built

@@ -47,6 +47,6 @@ a reviewer can use. Nothing on the page says so. The link should put that button
 
 ## Implementation notes
 
-- #3401 was squash-merged and GitHub retargeted this PR to main without rebasing it, so it
-  conflicted; merged main in, kept this branch's side plus #3401's last commit (`Promise.all`), and
-  dropped the pre-squash copies of #3401's tests and task file the merge resurrected.
+- iterate/iterate#3401 was squash-merged and GitHub retargeted this PR to main without rebasing it, so it
+  conflicted; merged main in, kept this branch's side plus iterate/iterate#3401's last commit (`Promise.all`), and
+  dropped the pre-squash copies of iterate/iterate#3401's tests and task file the merge resurrected.

@@ -53,7 +53,7 @@ import { decide, type DashboardRow, type PageUpdate } from "./page.ts";
  *  the p50 line is 15 s short of it, the p90 line 20 s past it. */
 export const LINES = { p50: 165, p90: 200, margin: 0.1, worse: 20, minPushes: 20 };
 /** The checks a push waits for, by their workflows' `name:`. LOC report and the PR dashboard gate
- *  nothing and finish within a minute; Kit Firmware runs only on firmware PRs. */
+ *  nothing and finish within a minute. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
 /** Preview OS's CI trace job: it only reports, so a push's wait ends before it. */
 const TRACE_JOB = "preview-os.yml:trace";

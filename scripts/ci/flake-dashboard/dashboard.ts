@@ -1,4 +1,4 @@
-// THE FLAKE DASHBOARD: issue #2580's body, computed from recent CI test runs' flake records and
+// THE FLAKE DASHBOARD: its GitHub issue's body, computed from recent CI test runs' flake records and
 // suite summaries (docs/testing.md#flakes-and-pinned-failures). ./evidence.ts reads the runs from
 // R2 and ./update.ts writes the issue; this module is a pure function of the runs it is given, so
 // each hourly run recomputes the whole body and nothing carries over between runs.

@@ -5,7 +5,7 @@
 // An OAuth access token cannot do that: each one is bound to one resource (RFC 8707).
 //
 // THE FORMAT, `itk_<user>_<key>_<secret><checksum>` (103 characters, under the Kit's 128-byte key
-// field, apps/kit/src/firmware/config-image.ts):
+// field, iterate/kit's src/firmware/config-image.ts):
 //   itk_       the prefix, so a leaked key is recognisable in a log, a paste or a repository
 //   <user>     32 hex, the person's id without `user_`: whose account holds the key
 //   <key>      16 hex, the key's id without `pat_`: which of the account's keys it is

@@ -1,6 +1,6 @@
 // agents/codemode-format.ts — THE RESPONSE FORMAT: markdown prose the person sees, plus at most
 // one `<codemode status="…">` block on its own lines holding JavaScript statements to run. mmkal's
-// codemode-tag grammar from PR #2568 — the settled parse only. Line-anchored tags mean a mid-line mention
+// codemode-tag grammar from PR iterate/iterate#2568 — the settled parse only. Line-anchored tags mean a mid-line mention
 // ("use a <codemode> tag") never opens anything, and the body ends at the LAST closing line so a
 // `</codemode>` inside a template literal cannot cut the script short.
 //

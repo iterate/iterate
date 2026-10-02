@@ -92,8 +92,8 @@ test("a workspace that left no artifact fails the job after the manifest is writ
 });
 
 // Depot runs a PR's workflow file from its merge ref and the Test job checks out its head, so a list
-// of workspaces in test.yml is main's. PRs #2985, #2986 and #2991 predated @iterate-com/ci-reports
-// (#2969): every test passed and the finalizer failed on the workspace their head does not have.
+// of workspaces in test.yml is main's. PRs iterate/iterate#2985, iterate/iterate#2986 and iterate/iterate#2991 predated @iterate-com/ci-reports
+// (iterate/iterate#2969): every test passed and the finalizer failed on the workspace their head does not have.
 test("the Test job expects its checkout's test workspaces, not main's", async () => {
   using tree = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeFileSync(join(tree.path, "pnpm-workspace.yaml"), "packages:\n  - core/os\n  - apps/docs\n");

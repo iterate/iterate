@@ -3,7 +3,7 @@
 // shortcut and the buttons that open it (the sidebar's "Search" row, and the header's on a phone,
 // where the sidebar is a sheet).
 //
-// command.tsx is vendored shadcn (packages/ui/AGENTS.md), so the palette's own look (#2991) lives
+// command.tsx is vendored shadcn (packages/ui/AGENTS.md), so the palette's own look (iterate/iterate#2991) lives
 // here, in the classNames it passes: flush rows edge to edge instead of upstream's inset, rounded
 // ones, and a borderless search row. Two parts are composed here instead: the search row is cmdk's
 // input under the palette's own markup, because upstream's CommandInput wraps it in an InputGroup

@@ -227,8 +227,8 @@ function runnerTrust(input: {
 
 /**
  * TEST_EVIDENCE_STEPS, which the workflow sets on the write step from its own step outcomes:
- * `tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}`. The steps
- * that run tests, so a Kit failure beside passing Vitest runners is a failed run, not a pass.
+ * `tests=${{ steps.tests.outcome }}`. The steps that run tests, so a failed step beside passing
+ * Vitest runners is a failed run, not a pass.
  */
 function testEvidenceSteps(value: string | undefined, diagnostics: string[]) {
   const steps: TestEvidenceManifest["steps"] = [];

@@ -1,10 +1,10 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, voice and kit. An app
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, admin and voice. An app
  * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
  * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
  *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts)
- *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash, kit); a
+ *   ensure-resources           the proxied DNS record for a custom-domain baseUrl (dash); a
  *                              workers.dev baseUrl has no zone in the account, so it only warns
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
@@ -23,7 +23,7 @@ import {
   dashEnvs,
   docsEnvs,
   getEnv,
-  kitEnvs,
+  kitWorkers,
   notesEnvs,
   osEnvs,
   previewDeployment,
@@ -72,7 +72,6 @@ const FIRST_PARTY_APPS: Record<
   docs: docsEnvs,
   admin: adminEnvs,
   voice: voiceEnvs,
-  kit: kitEnvs,
 };
 
 /** The zone one of our own ORIGINS denies: its registrable domain — except on workers.dev, where that
@@ -102,7 +101,7 @@ export function ownZones(): string[] {
     if (env.ingressRouting?.type === "subdomains") zones.add(env.ingressRouting.hostname);
     if (env.projectWildcard) zones.add(env.projectWildcard.hostname);
   }
-  for (const envs of Object.values(FIRST_PARTY_APPS))
+  for (const envs of [...Object.values(FIRST_PARTY_APPS), kitWorkers])
     for (const env of Object.values(envs)) zones.add(ownOriginZone(env.baseUrl));
   return [...zones].sort();
 }
@@ -218,7 +217,7 @@ function linkedEnvironment(
 }
 
 /** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the
- *  PostHog proxy, the auth gate and /api, Kit's firmware proxy, then TanStack Start's pages — but
+ *  PostHog proxy, the auth gate and /api, then TanStack Start's pages — but
  *  the static files, which the asset worker answers without starting an isolate: vite's hashed
  *  build output under /assets/, and each top-level entry of the app's public/ directory, which
  *  vite copies to the build's root. A cold isolate cost a static file 68–274 ms on prd

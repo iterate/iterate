@@ -70,7 +70,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | File                  | Runs on                                          | What it does                                                                                                     |
 | --------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                           |
-| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
+| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`                                                                                 |
 | `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
 | `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The event's line in #ci and the daily PR dashboard                                                               |
 | `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs** in shards, then CI trace           |
@@ -78,8 +78,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments                                                              |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
 | `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, Kit, SPA, dummy-petshop or ci-reports                                |
-| `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, SPA, dummy-petshop or ci-reports                                     |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse page per red signal                     |
 | `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                               |
@@ -87,7 +86,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
 | `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
 | `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
-| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2                  |
+| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes the [flake dashboard](https://github.com/iterate/iterate/issues/2580) from the flake records in R2    |
 | `ci-telemetry.yml`    | Hourly, dispatch                                 | One PostHog event per Depot workflow run and job attempt                                                         |
 | `release.yml`         | Daily, dispatch                                  | A dated `v…` release with a changelog when main moved                                                            |
 | `shadcn-drift.yml`    | PR touching the vendored shadcn files, dispatch  | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)                   |
@@ -308,7 +307,7 @@ other suite green, and from `main` it posts on main's head. From the PR's branch
 `deploy`. Either way the dispatch updates the suite's line in the PR body and posts the CI trace
 statuses on the PR's head. A preview by name may be redeployed under the dispatch by its own
 workflow (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview specs` do the same
-([core/os/README.md](../core/os/README.md)). `preview-delete.yml`
+([dev environments](dev-environments.md#story-2-run-what-ci-runs-locally)). `preview-delete.yml`
 (`--input pull-request-number=<pr-number>`) deletes a preview now, `preview-sweep.yml` sweeps now.
 
 Deploy a branch manually, or roll back by pushing a branch at the old commit first:
@@ -349,8 +348,8 @@ A step inside a `parallel:` block behaves as it would in the list: its `id`,
 `uses` and `with` all hold. Later steps read its `steps.<id>.outcome` and
 outputs, its `$GITHUB_STEP_SUMMARY` lines reach the job's summary, and it shares
 `$RUNNER_TEMP` and the workspace. After a failed step, only the block's steps
-with `always()` run. The Test job runs Kit's firmware host tests and the evidence
-upload's token fetch beside `pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
+with `always()` run. The Test job runs the evidence upload's token fetch beside
+`pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
 report step after that block reads the R2 upload's outcome.
 
 A condition that calls `hashFiles()` costs the runner about 0.2 s, the job's first
@@ -388,22 +387,8 @@ before changing a size, and the retries too before adding Playwright workers or 
 | Size (label)                    | Jobs                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `8x32` (`depot-ubuntu-24.04-8`) | Lint and Typecheck (four checks in parallel), Test, Deploy preview (seven client builds side by side)                                               | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`. Deploy preview's builds take 5–7 s against 9–12 s on a `4x16`, and it reaches the readiness gate 21.6/24.6 s p50/p90 after it starts against 25.3/28.4 s (n=5 each, 2026-09-27) |
-| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers), Kit Firmware's legs                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
+| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers)                                                                                        | iterate/iterate#3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                               |
 | `2x8` (`depot-ubuntu-24.04`)    | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                                                                                                                                                                                                       |
-
-## Kit firmware releases
-
-Kit Firmware (`kit-firmware.yml`) runs on firmware pull requests and main pushes, daily, and on
-dispatch (`devices=all` rebuilds every board after a builder change). Plan picks the boards whose
-inputs changed since their newest `kit-firmware/<device>/<version>` release, each builds in its own
-`4x16` leg, and Publish, the only job with `contents: write`, creates releases on main from the
-legs' artifacts and checks every new file's bytes through `k.iterate.com`. Deploy Kit builds no
-firmware. The ESP-IDF pin is in `scripts/ci/esp-idf.sh` and each target's `dependencies.lock`. A
-leg restores that pin's ESP-IDF, for the image's python3, from [Depot Cache](#depot-cache), and
-`esp-idf.sh ensure` installs from the network, with a warning, only when there was none, after which
-a main leg saves it. On a 4x16 a leg restores its 1.06 GB in 7 s and builds a board in 30 s, against
-12–27 s and 48–52 s on a 2x8, for about the same cost.
-[Kit firmware releases](../apps/kit/README.md#firmware-releases) has the rest.
 
 ## Setup on Depot's stock image
 
@@ -426,8 +411,8 @@ After its checkout, a job runs `uses: ./.depot/actions/setup`, whose steps run o
 3. **Install dependencies**: waits for the toolchain, then
    `pnpm install --frozen-lockfile --prefer-offline`.
 
-A job's workspace is installed 7–8 s after it starts on a 4x16 or an 8x32, 9 s on a 2x8. Kit
-Firmware's jobs install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's two scripts
+A job's workspace is installed 7–8 s after it starts on a 4x16 or an 8x32, 9 s on a 2x8. Preview
+OS's two scripts
 that choose the tested commit (`preview-tested-commit.ts`, `preview-paths.ts`) run before the setup
 on the stock image's own Node 22, with nothing but Node's builtins, since the PR head they start
 from may predate the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
@@ -440,20 +425,17 @@ project and config.
 
 `actions/cache` is Depot Cache on Depot CI, whose entries expire after 14 days:
 
-| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                          |
-| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
-| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key          |
-| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | each specs shard, beside its setup                                 | Main OS e2e's first shard, on a push that missed  |
-| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it |
+| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                         |
+| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------ |
+| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key         |
+| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | each specs shard, beside its setup                                 | Main OS e2e's first shard, on a push that missed |
 
-Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
-an older pin's is of no use, nor is one whose Python environment was built for another python3.
+Off main a restore falls back to the newest entry of its kind (`restore-keys`).
 Main restores the exact key alone, so what main saves holds only its own lockfile's packages:
 `pnpm store prune` cannot cut an older store down, since it drops every file with one link, and
 pnpm copies the packages it builds. A restore that fails or times out is a
-warning, and the job fetches what it lacks: from the npm registry, from Playwright's CDN (the
-suite's `playwright install --only-shell`), or from GitHub, dl.espressif.com and PyPI
-(`esp-idf.sh ensure`, with its own warning). Test's summary says which store its install started
+warning, and the job fetches what it lacks: from the npm registry, or from Playwright's CDN (the
+suite's `playwright install --only-shell`). Test's summary says which store its install started
 from and whether main saved one, and warns on a failed restore or save
 (`scripts/ci/pnpm-store-report.sh`). actions/cache reports most other trouble only in its own log:
 a restore that could not read Depot Cache reads as none restored.
@@ -463,9 +445,7 @@ open pull request's lockfile, so a pull request could plant a store for main's r
 workflow. So only main writes it, and no job that ships to production reads it: the `deploy-*.yml`
 workflows and `release.yml` install from the npm registry (`pnpm-store: none`), whose lockfile
 hashes vouch for every package, about 5 s more on a 2x8 and 3 s on a 4x16. Every workflow that
-reads it holds a read-only `contents` token. Kit Firmware's legs on main, which build the release
-firmware, read the exact ESP-IDF key: the same exposure as the image they booted before, whose tag
-a pull request's workflow could as well have pushed. Today a planted entry reaches nothing its
+reads it holds a read-only `contents` token. Today a planted entry reaches nothing its
 author's own run does not already have, because Depot CI runs no pull request from a fork, so every
 run is from someone who can push here, with the one `DOPPLER_TOKEN`, which also reads
 `_shared/preview` (the Depot organization token, the preview Cloudflare API token).
@@ -516,11 +496,10 @@ workflow files, and registers the `on:` triggers from the default branch
 
 So every pull-request job runs the run's own commit, the tree its workflow file came from, never
 `head.sha`: main's workflow against the PR's older code fails every PR not rebased past a change
-that needs code landing with it (#2999: main's `test.yml` named a workspace the PR heads lacked).
+that needs code landing with it (iterate/iterate#2999: main's `test.yml` named a workspace the PR heads lacked).
 `depot-workflows.test.ts` enforces each checkout:
 
-- Lint and Typecheck, Test, LOC report, the PR dashboard and Kit Firmware's Plan and build legs
-  check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
+- Lint and Typecheck, Test, LOC report and the PR dashboard check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
 - Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which deploys
   it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`. The suites start
   beside the deploy, so they find its commit themselves, by the deploy's own two steps: the PR's
@@ -528,7 +507,7 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
   the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the preview's
   name use the PR head.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
-  unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
+  unmerged PR's head. An unmerged head older than a main change runs the old teardown (iterate/iterate#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
 
 So a PR's checks cover the PR merged into main at the push: a semantic conflict is a real red. A
@@ -542,7 +521,7 @@ main's file against the PR merged into main now, and a Preview delete dispatch t
 GitHub builds no test merge commit for a PR that conflicts with main, and Depot starts no workflow
 without one: it records a run with no commit and one failed workflow with no name or jobs (its
 error says the merge ref is stale), and the PR shows no Lint and Typecheck, Test or Preview OS
-checks at all (#3007 sat with only Bugbot's check until rebased).
+checks at all (iterate/iterate#3007 sat with only Bugbot's check until rebased).
 
 The **Merges with main** check (`.github/workflows/merges-with-main.yml`, rules in
 `scripts/ci/merges-with-main.ts`) closes that gap. GitHub Actions starts `pull_request_target`
@@ -577,7 +556,7 @@ commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockf
 Preview OS runs on every pull request with no `paths` filter, because GitHub leaves a required
 check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
-`previewPaths` (`core/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
+`previewPaths` (`core/os`, `configs`, the hosted clients, `specs` and
 `test/playwright.config.ts`, `core/lib`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
 `scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
@@ -595,7 +574,7 @@ hosted clients the root `package.json` and `pnpm-workspace.yaml`. `scripts/ci/de
 pins the exceptions:
 
 - No client deploy runs for `core/os`: no client imports it.
-- Deploy Kit and Deploy Voice run for `packages/voice`: their pages run its voice check
+- Deploy Voice runs for `packages/voice`: its pages run its voice check
   (`@iterate-com/voice/install`).
 - Deploy OS skips what never reaches the Worker: the markdown at the app root, `core/os/docs`,
   `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `core/os/public/setup-prompt.md`
@@ -645,7 +624,7 @@ same names.
 
 With Playwright's full parallelism a spec starts as soon as a worker is free, so when
 `shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
-longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
+longest spec. Each shard is a `4x16` with six workers (the density iterate/iterate#3258 measured), so there are
 `ceil(specs / 6)` shards: 10 for 58 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
 fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
@@ -664,7 +643,7 @@ fullest shard holds `ceil(specs / shards)`.
   way its verdict comes about a second after it. In the CI trace the shards sit under its row,
   below its own steps in one **Coordinate shards** row, where its wait for them is nearly all.
 - Cost: every shard waits out the deploy on its own `4x16`, and Browser specs on a `2x8`. More
-  workers against one preview have raised retries before (#3258), so compare the retried specs per
+  workers against one preview have raised retries before (iterate/iterate#3258), so compare the retried specs per
   run before and after changing the count.
 
 ### Suites start with the run
@@ -808,16 +787,15 @@ context sweep's result, the orphans it destroyed included (the crash hunt leaves
 and the 🧪 test pages. `notify.ts deploy-success --test-run` with a merged commit's `GITHUB_SHA`
 replies in that merge's thread, as its deploy did.
 
-| Poster                                                  | One page per   | Resolved by                                                  |
-| ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
-| `notify.ts deploy-failure`                              | failing commit | every app on it live again at a commit that descends from it |
-| `prd-post-deploy-check.ts`                              | os-prd         | the next passing check                                       |
-| `notify.ts workflow-failure` (Kit firmware, crash hunt) | workflow       | its next green run (`workflow-resolved`)                     |
+| Poster                                    | One page per   | Resolved by                                                  |
+| ----------------------------------------- | -------------- | ------------------------------------------------------------ |
+| `notify.ts deploy-failure`                | failing commit | every app on it live again at a commit that descends from it |
+| `prd-post-deploy-check.ts`                | os-prd         | the next passing check                                       |
+| `notify.ts workflow-failure` (crash hunt) | workflow       | its next green run (`workflow-resolved`)                     |
 
 Another app failing on the same commit, an app live again, or another deploy failing the host check
 is an edit of the page, not a reply; a red workflow whose failed jobs change also replies in today's
-dashboard thread. Kit firmware's green run is one that built and published: a run that plans no release
-skips both and resolves nothing. A deploy step posts to #ci only when its whole job succeeded,
+dashboard thread. A deploy step posts to #ci only when its whole job succeeded,
 and a failed post never turns the deploy red. Each PR event's line posts from `pr-dashboard.yml`'s
 `notify` job, which has no concurrency group: a group cancels the pending run a newer one replaces,
 and that event would get no line.

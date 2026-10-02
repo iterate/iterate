@@ -5,16 +5,16 @@ size: medium
 
 # Browser specs in shards again: every spec at once
 
-**Status:** done in #3394. Ten shards of six workers, shard 1 collects and gives the verdict, the CI trace groups the shards and shows each job's steps flat. Two green PR runs: Browser specs' verdict 85 s and 103 s after the run started (deploy ends at 56 s), no retries in 112 spec runs. Still open: whether `depot ci retry --failed` re-collects a retried leg (unexercised), and the follow-ups below. Assumptions below were made without Misha; each says why.
+**Status:** done in iterate/iterate#3394. Ten shards of six workers, shard 1 collects and gives the verdict, the CI trace groups the shards and shows each job's steps flat. Two green PR runs: Browser specs' verdict 85 s and 103 s after the run started (deploy ends at 56 s), no retries in 112 spec runs. Still open: whether `depot ci retry --failed` re-collects a retried leg (unexercised), and the follow-ups below. Assumptions below were made without Misha; each says why.
 
-Browser specs had six 16-worker shards on the legacy platform (#2659, 2026-09-16). The os-next roll-forward (#2837, 2026-09-23) replaced that workflow with Preview OS's single Browser specs job, so sharding went with it. Bring it back on Preview OS and Main OS e2e, simpler than last time.
+Browser specs had six 16-worker shards on the legacy platform (iterate/iterate#2659, 2026-09-16). The os-next roll-forward (iterate/iterate#2837, 2026-09-23) replaced that workflow with Preview OS's single Browser specs job, so sharding went with it. Bring it back on Preview OS and Main OS e2e, simpler than last time.
 
 ## The maths
 
-Rule (Misha, #2659): with Playwright's full parallelism, `shards × workers ≥ tests`, so every spec starts at once and the suite takes about as long as its longest spec.
+Rule (Misha, iterate/iterate#2659): with Playwright's full parallelism, `shards × workers ≥ tests`, so every spec starts at once and the suite takes about as long as its longest spec.
 
 - **Tests:** 56 in `pnpm spec --list` today (54 run, 2 skip), measured from main's Browser specs job `vbs7x5989z` (2026-09-28).
-- **Workers per shard: 6**, on a `4x16`, the density #3258 measured on this platform (2026-09-27): six browsers peak at 2.7 of 4 vCPUs. Unchanged from today.
+- **Workers per shard: 6**, on a `4x16`, the density iterate/iterate#3258 measured on this platform (2026-09-27): six browsers peak at 2.7 of 4 vCPUs. Unchanged from today.
 - **Shards: 10.** `ceil(56 / 6) = 10`, so 60 slots, 4 spare.
 - Playwright 1.63 deals `floor(tests / shards)` tests to each shard and one more to the first `tests mod shards` (`filterForShard`), in list order. No spec uses serial mode, so each test is its own group and the fullest shard holds `ceil(tests / shards)`. The guard below checks exactly that.
 
@@ -30,13 +30,13 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 
 ## Assumptions (made without Misha)
 
-- "Whatever we settled on last week" = six workers per `4x16` (#3258), not last fortnight's 16 per 16-core runner (#2659): #3258 is the newest measurement on this platform.
-- Fixed counts plus a failing guard, not adaptive sharding, as Misha asked in #2659.
+- "Whatever we settled on last week" = six workers per `4x16` (iterate/iterate#3258), not last fortnight's 16 per 16-core runner (iterate/iterate#2659): iterate/iterate#3258 is the newest measurement on this platform.
+- Fixed counts plus a failing guard, not adaptive sharding, as Misha asked in iterate/iterate#2659.
 - Shards start with the run and wait for the deploy, as Misha described, not `needs: deploy`. That costs idle runner time; see the cost note.
 
 ## Risks to measure, not assume
 
-- **Retries.** #3258 found 12+ browsers at once against one preview retried 2 to 4 times as many specs, mostly specs whose page shows no progress while the preview is busy (1 s action budget). Ten shards put about 54 browsers on the preview at once. The PR measures retried specs per run against the 0.26 to 0.31 baseline and reports it, whatever it is.
+- **Retries.** iterate/iterate#3258 found 12+ browsers at once against one preview retried 2 to 4 times as many specs, mostly specs whose page shows no progress while the preview is busy (1 s action budget). Ten shards put about 54 browsers on the preview at once. The PR measures retried specs per run against the 0.26 to 0.31 baseline and reports it, whatever it is.
 - **Cost.** Nine more `4x16` runners a push, each mostly waiting for the deploy: roughly +$0.17 a push, about +$30 a day at 180 pushes. Starting shards 2 to 10 with `needs: deploy` would roughly halve that for about 13 s more wall.
 - **Time to green.** E2E tests (ends 141/187 s p50/p90) and Test (141/163 s) become the wall once specs are faster, so PR time to green gains less than the specs job does.
 
@@ -53,7 +53,7 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 - [x] Workflow tests (`preview-os-workflow.test.ts`, `depot-workflows.test.ts`) pin the new shape
 - [x] Docs: `docs/depot-ci.md` (preview job shape, reliability defaults), `docs/testing.md` _new section "Browser specs in shards"_
 - [x] Main's alert page and the CI telemetry sync read every shard _`scripts/monitors/e2e.ts` names failing rows from any leg; `testEvidenceJobs` lists `specs-shard`_
-- [x] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with #3258's numbers _runs `qxmljkwgml`, `jvb8z6wp57`: verdict 85/103 s after the run's start, slowest shard's tests 22.6/40.4 s (vs ~84 s Playwright on one 4x16 in #3258), 0 retries; n=2, so the retry rate is still to watch on main_
+- [x] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with iterate/iterate#3258's numbers _runs `qxmljkwgml`, `jvb8z6wp57`: verdict 85/103 s after the run's start, slowest shard's tests 22.6/40.4 s (vs ~84 s Playwright on one 4x16 in iterate/iterate#3258), 0 retries; n=2, so the retry rate is still to watch on main_
 - [ ] ~~Check `depot ci retry <run> --failed` on a red leg re-runs the leg and shard 1, and shard 1 collects the new attempt~~ _not exercised: no leg went red on this PR; the collector reads each leg's newest attempt, which its tests cover_
 
 - [x] Browser specs as a coordinator (Misha, follow-up): `specs` runs no spec; the matrix is shards 1–10, all alike; `specs` starts with the run on a `2x8`, decides "is there a preview" by the suites' own (anchored) steps, collects, and uploads the merged report _the trace nests the shards under its row instead of a synthetic group_

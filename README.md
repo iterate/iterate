@@ -13,7 +13,6 @@ The Iterate context platform runs at **https://os.iterate.com**. `core/os` owns 
 | `apps/notes`             | Notes client                                                    |
 | `apps/docs`              | Docs client: a project's markdown docs, served like Notes       |
 | `apps/voice`             | Voice client                                                    |
-| `apps/kit`               | Device installer and firmware using the platform                |
 | `apps/admin`             | Every project and person, and a raw context explorer            |
 | `apps/spa`               | Static SPA archetype; also hosts the browser extension download |
 | `apps/browser-extension` | Chrome side panel that lends a browser to a project             |

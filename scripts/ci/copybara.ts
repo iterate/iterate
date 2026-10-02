@@ -11,6 +11,8 @@
 // a token for the two copies and this repository, which it reads them from (getRepo: iterate/iterate,
 // then iterate/private). A copy that is empty, or whose last copied commit this repository doesn't
 // have (iterate/private starts with a fresh history), starts again from one snapshot of that commit.
+// Each copy's rulesets refuse every other push, an org admin's too
+// (`gh api repos/iterate/core/rulesets`), and secret scanning with push protection is on.
 //
 // `check` (a pull request's check, .depot/workflows/copybara.yml) writes what iterate/core would hold
 // at this checkout's HEAD into a folder, pushing nothing, and runs the self-host recipe against it.

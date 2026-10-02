@@ -25,7 +25,7 @@ Copy `scripts/app.ts` and `src/routes/` from `apps/voice`:
   under paths ingress needs Notes' `basePath` too (`apps/notes/src/base-path.ts`).
 
 The rest is the shared shell called with the app's own values: `vite.config.ts` is
-`startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, #2904),
+`startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, iterate/iterate#2904),
 `src/server.ts` is `appServerEntry` (`@iterate-com/ui/apps/server`: `/healthz`, which the deploy
 smoke hits, the PostHog proxy and the sign-in gate under the app's `clientName`) and
 `export { BrowserSession }`, and `src/router.tsx` is `createAppRouter`. Add the `package.json`
@@ -43,7 +43,7 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 | `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and the apps' `APP_CONFIG` `urls`                                                                                                                  |
 | `packages/shared/src/start-app-config.ts`                                                     | the app's name under `urls`, which `FIRST_PARTY_APPS` is typed against                                                                                                                             |
 | `scripts/os/preview-config.ts`                                                                | `APPS`, so each PR deploys it next to the platform and it gets its own `Sign in ↗` link                                                                                                            |
-| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                                                       |
+| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                                                           |
 | `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description                                               |
 | `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                                                      |
 | `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`                                      | only for a custom domain under `iterate.com`                                                                                                                                                       |

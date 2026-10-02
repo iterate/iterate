@@ -5,8 +5,6 @@ setup:
     path: packages/shared/
   - project: os
     path: core/os/
-  - project: kit
-    path: apps/kit/
   - project: dash
     path: apps/dash/
   - project: agents

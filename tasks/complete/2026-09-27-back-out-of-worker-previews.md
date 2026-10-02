@@ -15,7 +15,7 @@ Action item from the 2026-09-25 call with Jonas (Tuple call `57360661`). Worker 
 - we pin a draft wrangler (`pkg.pr.new/wrangler@14416`) because released wrangler leaks a preview's KV/R2 on delete
 - an existing preview can't gain a DO class (10061), so `preview.ts` deletes and recreates it
 - Cloudflare's new config tooling doesn't support previews, which keeps our post-build `previewWranglerConfig` transform alive
-- an in-place redeploy leaves old DOs answering with the old code for up to ~100 s, which the readiness gate has to wait out (#3069)
+- an in-place redeploy leaves old DOs answering with the old code for up to ~100 s, which the readiness gate has to wait out (iterate/iterate#3069)
 
 Jonas measured a brand-new plain worker at about 10 s slower to deploy than an in-place preview redeploy. Plain workers are "dirt simple, nuts and bolts", and "if we decide we were wrong … we can back out of the backing out".
 
@@ -26,10 +26,10 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 1. **Plain Workers wherever a Worker Preview is used today.** Ordinary `wrangler deploy` on the dev/preview account with released wrangler; no `previews` config block, no `wrangler preview`, no pkg.pr.new pin.
 2. **Path-based project routing stays** (workers.dev, `ingressRouting: paths`). Every project on a PR or CI deployment trusts the others.
 3. **No change detection here.** Every run deploys the same set it does today (os + all 6 apps on PRs).
-4. **Each set's os worker gets its own D1.** Settled as "don't wait for Jonas's D1 change"; it landed mid-grill (#3145). So `<name>-os-db` is created and migrated before the code uploads (`scripts/d1.ts`), as a preview's D1 is now.
+4. **Each set's os worker gets its own D1.** Settled as "don't wait for Jonas's D1 change"; it landed mid-grill (iterate/iterate#3145). So `<name>-os-db` is created and migrated before the code uploads (`scripts/d1.ts`), as a preview's D1 is now.
 5. **A fresh set of workers per tested commit**: `pr<n>-<sha7>-<app>` (`pr3144-a1b2c3d-os`, `pr3144-a1b2c3d-dash`, …), sha7 of the tested commit (the PR merged into main). Each os worker has its own KV ×2, R2 and Artifacts namespace. `reset` goes away. The PR body's Sign in link re-seeds the test person and project each deploy, so data not surviving a push costs nothing.
 6. **The parents stay as plain "main on dev" workers.** `os`, `dash`, … at `*.iterate-dev-preview.workers.dev`, deployed in place from main by `preview-parents.yml` and reset nightly, as today. Only comments and docs stop calling them parents; no PR depends on them.
-7. **Every workflow moves.** `preview-os.yml`, `main-os-e2e.yml`, `os-latency.yml`, `os-real-model.yml`, `os-e2e-soak.yml` all deploy `<prefix>-<sha7>-<app>`; `--name` is the prefix. (`--settle` already went in #3069.) The in-place version wait #3069 added is only needed where a worker is still redeployed in place: main on dev.
+7. **Every workflow moves.** `preview-os.yml`, `main-os-e2e.yml`, `os-latency.yml`, `os-real-model.yml`, `os-e2e-soak.yml` all deploy `<prefix>-<sha7>-<app>`; `--name` is the prefix. (`--settle` already went in iterate/iterate#3069.) The in-place version wait iterate/iterate#3069 added is only needed where a worker is still redeployed in place: main on dev.
 8. **Cleanup in three layers.**
    - A `Clean up superseded` job, started once the new set passes readiness and run beside the suites, deletes every older set with the same prefix. It never gates checks; a cancelled one is covered by the next run's.
    - PR close (`preview-delete.yml`) deletes every `pr<n>-*` set.
@@ -43,7 +43,7 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 ## Checklist
 
 - [x] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today) _`previewDeployment(name)`, `osEnv(name)` and an optional `OsEnv.resources`; the clash checks went: every name ends `-<sha7>-<member>`, which no account resource has_
-- [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; since #3250, `adminIssuer`, `testEmailDomain` and `admins` on `OsEnv`_
+- [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; since iterate/iterate#3250, `adminIssuer`, `testEmailDomain` and `admins` on `OsEnv`_
 - [x] `preview.ts deploy`: build and `deployApp` os and each app with released wrangler; secrets per worker; readiness gate kept for a brand-new worker's first seconds; the in-place version wait only for main on dev _`deployOs({ env: name })` (deploy.ts creates D1/R2/Artifacts, then migrates) + `deployStartApp`; gate fed the version `/version` names_
 - [x] Delete `preparePreviewWrangler`, `uploadPreviewSecrets`, the 10061 recreate path, `reset`, `previewWranglerConfig`, `writeStartAppPreviewConfig` _gone, with `--apps auto` (a fresh name never has the untouched apps)_
 - [x] Delete a set: `wrangler delete` each worker, then KV, R2 (emptied first), Artifacts namespace and D1 by name _`deletePreviewDeployment`: workers via `DELETE /workers/scripts/:name?force=true`, then KV/R2/D1/Artifacts, all settled_
@@ -57,7 +57,7 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 - [x] `docs/dev-environments.md`: the four second-push scenarios (decision 12) _"Second pushes" table (five rows: the cleanup-cancelled case too)_
 - [x] Docs: `docs/dev-environments.md`, `docs/pull-requests.md` (Previews), `apps/os/README.md`, `docs/depot-ci.md`, the workflow headers, `envs.ts` comments (parents → main on dev) _plus testing.md, the creating-an-app skill, debug-os-worker skill_
 - [x] Tests: `preview.test.ts`, `preview-sweep.test.ts`, `scripts/ci/depot-workflows.test.ts`, `scripts/ci/preview-os-workflow.test.ts` _plus start-app.test.ts and the favicon test_
-- [x] ~~Post-merge, once: delete every Worker Preview still on `os` and the app parents~~ _not a one-off: the nightly sweep's legacy step (`deleteLegacyWorkerPreviews`, `planLegacyWorkerPreviewSweep`) takes each once idle a day, on `os`, `<app>` and #3260's former parents, with os's previews' KV/R2/D1/Artifacts_
+- [x] ~~Post-merge, once: delete every Worker Preview still on `os` and the app parents~~ _not a one-off: the nightly sweep's legacy step (`deleteLegacyWorkerPreviews`, `planLegacyWorkerPreviewSweep`) takes each once idle a day, on `os`, `<app>` and iterate/iterate#3260's former parents, with os's previews' KV/R2/D1/Artifacts_
 
 ## Evidence (decision 11)
 
@@ -68,7 +68,7 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 - [ ] Main OS e2e green on `main-<sha7>` _runs on merge_
 - [ ] `os-latency.yml` once _its next 3-hourly run after merge_
 - [x] ~~The dashboard's Durable Objects data view working on a per-commit worker (screenshot)~~ _not taken; per-commit workers are plain workers, which the data view supports_
-- [x] Workers on the account, counted before and after _34 before, 35–36 during (one PR deployment = 7); 196 Durable Object namespaces, none left by a deleted worker: deleting a worker takes its namespaces, so #3260's 500-namespace squeeze does not recur. `os` alone still holds 88 for its legacy Worker Previews, which the sweep takes_
+- [x] Workers on the account, counted before and after _34 before, 35–36 during (one PR deployment = 7); 196 Durable Object namespaces, none left by a deleted worker: deleting a worker takes its namespaces, so iterate/iterate#3260's 500-namespace squeeze does not recur. `os` alone still holds 88 for its legacy Worker Previews, which the sweep takes_
 
 ## Context
 
@@ -79,9 +79,9 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 
 ## Implementation log
 
-- 2026-09-25: main moved twice mid-grill: #3145 (the control plane is D1) and #3069 (in-place readiness, `--settle` gone). Decision 4 became "each set's os worker gets its own D1".
+- 2026-09-25: main moved twice mid-grill: iterate/iterate#3145 (the control plane is D1) and iterate/iterate#3069 (in-place readiness, `--settle` gone). Decision 4 became "each set's os worker gets its own D1".
 - Resources: the repo's wrangler (4.140) auto-provisions binding-only KV as `<worker>-<binding>` and finds a D1 by `database_name`, but an R2 `bucket_name` is "fully specified" (never provisioned), and a D1 has to be migrated before the code uploads. So deploy.ts creates D1, R2 and Artifacts by name and wrangler creates the KV. Checked in `wrangler-dist/cli.js` (`provisionBindings`, `autoProvisionedResourceName`, `D1Handler.isConnectedToExistingResource`).
 - Legacy Worker Previews: the Cloudflare API deletes them directly (`DELETE /workers/workers/{worker}/previews/{name}?force=true`), so the transitional sweep step needs no draft wrangler.
-- Merged main after #3166 (the apps read `APP_CONFIG`): `startAppWorkerConfig` builds that blob from `linkedEnvironment`, and the preview swap it added (`startAppPreviewConfig`) is gone with the rest.
+- Merged main after iterate/iterate#3166 (the apps read `APP_CONFIG`): `startAppWorkerConfig` builds that blob from `linkedEnvironment`, and the preview swap it added (`startAppPreviewConfig`) is gone with the rest.
 - Latency guard: it measured an in-place-redeployed preview on purpose ("what production is"). It now measures a fresh deployment whenever main moved between runs, so its baseline may shift once.
-- 2026-09-27: merged main again, 65 commits. #3250 replaced test links with prd admins signing in through prd and `login_hint` impersonation: `OsEnv.testLinks` became `adminIssuer` + `testEmailDomain`, and `previewDeployment` lists its `admins` itself (prd's plus `admin@preview.iterate.test`), so the generator no longer merges admins. #3238 had moved the suite lines into the CI trace job; with the status and suite lines already gone from the section here, the hand-over and `pnpm preview suite-lines` went too, keeping its injected, tested `writePullRequestBody`. #3260's former-parent rule 0 folded into the legacy step (24 h idle for every legacy Worker Preview, not just the former parents'). #3268 moved the integration reference; the `--deployment` note moved with it.
+- 2026-09-27: merged main again, 65 commits. iterate/iterate#3250 replaced test links with prd admins signing in through prd and `login_hint` impersonation: `OsEnv.testLinks` became `adminIssuer` + `testEmailDomain`, and `previewDeployment` lists its `admins` itself (prd's plus `admin@preview.iterate.test`), so the generator no longer merges admins. iterate/iterate#3238 had moved the suite lines into the CI trace job; with the status and suite lines already gone from the section here, the hand-over and `pnpm preview suite-lines` went too, keeping its injected, tested `writePullRequestBody`. iterate/iterate#3260's former-parent rule 0 folded into the legacy step (24 h idle for every legacy Worker Preview, not just the former parents'). iterate/iterate#3268 moved the integration reference; the `--deployment` note moved with it.

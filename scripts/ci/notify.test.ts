@@ -454,10 +454,10 @@ test("a red workflow pages in today's dashboard thread, not sent to the channel;
 
   // the next red run is a new incident; another workflow's green run resolves nothing of it
   await run(["crash-hunt"], "eeeeeee5");
-  await green("Kit Firmware", "fffffff6");
+  await green("context sweep", "fffffff6");
   expect({ errorPulse: shape(slack).slice(3), rows: rows(slack) }).toEqual({
     errorPulse: [`  ↳ 🚨 OS crash hunt failed: crash-hunt ${mention}`],
-    rows: ["🟢 Kit Firmware: green at fffffff", "🔴 OS crash hunt: failed in crash-hunt"],
+    rows: ["🟢 context sweep: green at fffffff", "🔴 OS crash hunt: failed in crash-hunt"],
   });
 });
 

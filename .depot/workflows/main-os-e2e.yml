@@ -43,7 +43,6 @@ on:
       - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
-      - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
       - .depot/workflows/main-os-e2e.yml
       - core/os/**
@@ -55,9 +54,6 @@ on:
       - apps/docs/**
       - apps/admin/**
       - apps/voice/**
-      - apps/kit/**
-      # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
-      - "!apps/kit/firmware/**"
       - test/**
       - core/lib/**
       - packages/voice/**

@@ -16,7 +16,7 @@
 //     invocation. NO WALL-CLOCK BUDGETS HERE: this file runs beside every other e2e file (16 at a
 //     time, their rows concurrent) against one shared worker, so a latency it measures is the
 //     suite's contention as much as the platform's (a 1.6 s whoami against a 1.5 s budget, main
-//     f5fdb3cf; a 582 ms p50 against 500, #2962). The latency and throughput budgets are
+//     f5fdb3cf; a 582 ms p50 against 500, iterate/iterate#2962). The latency and throughput budgets are
 //     vitest/os/perf/push-delivery.perf.test.ts, which runs alone; the lines printed here are for comparison
 
 import { expect, test } from "vitest";

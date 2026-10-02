@@ -6,7 +6,7 @@ size: small
 # pkg-pr-new moves from packages/shared to iterate
 
 Pre-work item 3 for moving apps/os into `core/`, third slice (after iterate/iterate#3466 and
-#3470). The default-template decision unblocks it: Copybara will rewrite `@main` to
+iterate/iterate#3470). The default-template decision unblocks it: Copybara will rewrite `@main` to
 `@<40-character iterate/iterate sha>` in the copied configs/*/package.json, so the public copy's
 templates name an exact pkg.pr.new build. core still needs the module at runtime: apps/os resolves
 a config repo's pkg.pr.new dependencies (src/context/module-resolution.ts) and pins them

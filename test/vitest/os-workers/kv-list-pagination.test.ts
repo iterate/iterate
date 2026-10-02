@@ -7,7 +7,7 @@
 // then a cursor) and a list reads what was just written. Deployed KV's list is eventually consistent,
 // up to about 60 s after a write (Cloudflare's KV docs), so the deployed row this replaces measured
 // KV propagation, not the pagination — it timed out waiting 15 s for 1001 keys in 9 of 124 preview
-// e2e runs (the CI flake dashboard, issue #2580).
+// e2e runs (the CI flake dashboard).
 import { expect, test } from "vitest";
 import { stub } from "./support.ts";
 

@@ -88,9 +88,9 @@ setup.
 Use this to prove that a PR's deployed preview works through the real browser,
 the issuer's sign-in, routing and the app UI. The automated smoke is the Preview
 OS workflow's Browser specs job (the browser specs against the PR's preview,
-beside its E2E tests job). Re-run it from `core/os` with
+beside its E2E tests job). Re-run it from the repository root with
 `doppler run --project os --config preview -- pnpm preview specs --pr <number>`,
-or from CI without redeploying (see its [README](../core/os/README.md)).
+or from CI without redeploying ([Depot CI](depot-ci.md#run-the-suites-against-a-deployed-preview)).
 
 For a hands-on smoke, take the preview URL from the PR body and sign in as in
 [Disposable sessions](#disposable-sessions), with the preview's password kept

@@ -6,10 +6,10 @@ size: medium
 # iterate's apps/os tooling moves out of apps/os
 
 Pre-work item 2 for moving apps/os into `core/` (item 1 was envs.ts: iterate/iterate#3447 and
-#3448, `tasks/complete/2026-09-29-os-deployment-config-into-apps-os.md`). Core builds from a clone
+iterate/iterate#3448, `tasks/complete/2026-09-29-os-deployment-config-into-apps-os.md`). Core builds from a clone
 of itself; outside code may import core, core never imports outside code.
 
-After #3448 the apps/os build reaches nothing in envs.ts, but 12 apps/os files still import it. All
+After iterate/iterate#3448 the apps/os build reaches nothing in envs.ts, but 12 apps/os files still import it. All
 but one are iterate's own tooling: deploying prd and main on dev, provisioning, erasing, seeding,
 the per-PR previews, soak and load runs. A self-hoster needs none of it. This moves that tooling to
 `scripts/os/`, next to the rest of iterate's scripts.
