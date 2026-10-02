@@ -1,5 +1,5 @@
 {
-  // The apps on Workers (core/os, dash, agents, notes, docs, voice, kit, dummy-petshop and ci-reports):
+  // The apps on Workers (core/os, dash, agents, notes, docs, voice, dummy-petshop and ci-reports):
   // Worker and browser code in one program, built by Vite.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {

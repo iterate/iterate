@@ -6,7 +6,6 @@ packages:
   - apps/docs
   - apps/admin
   - apps/voice
-  - apps/kit
   - apps/spa
   - apps/browser-extension
   - apps/dummy-petshop

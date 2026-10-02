@@ -161,7 +161,7 @@ read secrets.
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
 - PR sign-in links: every hosted client (Dash, Agents, Notes, Docs, Admin,
-  Voice, Kit) is deployed next to the platform in each per-commit deployment and wired
+  Voice) is deployed next to the platform in each per-commit deployment and wired
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
   (core/os's into the Dash's project), and with the Dash one per template in
   `core/configs` and `configs` ("New project from template"), which lands in the Dash's New project
@@ -415,8 +415,8 @@ A deployment is a complete, isolated set of plain Workers on the dev/preview
 Cloudflare account, named `<prefix>-<sha7>`: `pr<n>` and the first 7 digits of
 the commit CI tests (the PR merged into main). core/os is
 `https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev`, with Durable
-Objects, a D1, KV, R2 and an Artifacts namespace of its own. The seven hosted
-clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
+Objects, a D1, KV, R2 and an Artifacts namespace of its own. The six hosted
+clients (Dash, Agents, Notes, Docs, Admin, Voice) are `pr<n>-<sha7>-<app>`: each
 signs in against that core/os, and every link between them names the same
 deployment's apps. The name decides everything (`previewDeployment` in
 `envs.ts`), and the build and deploy are prd's (`scripts/os/deploy.ts`,

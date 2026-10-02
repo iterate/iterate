@@ -19,7 +19,7 @@ pnpm spec                # product browser specs (test/playwright/AGENTS.md)
 
 Read when relevant:
 
-- [Repository map](README.md) · [Platform](core/os/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
+- [Repository map](README.md) · [Platform](core/os/README.md) · Kit (the boards' firmware and k.iterate.com) is [iterate/kit](https://github.com/iterate/kit)
 - [Dev environments](docs/dev-environments.md): local dev, per-PR previews, and acting as users and operators
 - [Testing](docs/testing.md) · [Browser specs](./test/playwright/AGENTS.md) · [Vitest patterns and the shape of a test](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
 - [Depot CI](docs/depot-ci.md): workflows, running CI without a PR, runs, logs, artifacts, and waiting on checks

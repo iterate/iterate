@@ -3,6 +3,8 @@
 // depends on this package and re-exports its service and relay class from `voice.ts`, and every
 // rule and row voice writes names that module of the project's published config, as the agents
 // app's name `agents.ts` (iterate/agents/install). Not the runtime, so importing it loads none.
+// Kit lives in iterate/kit and installs this package from pkg.pr.new at a pinned commit: a change to
+// what `ensureVoiceAgent` asks for or writes reaches Kit's Prepare only when that pin moves.
 import type {} from "./api.ts"; // registers `itx.voice` on InstalledAppRoots
 import type { FacetSpec, IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
 import { canonicalItxExpressionPrefix, type ItxExpressionInput } from "iterate/expression";

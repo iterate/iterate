@@ -1,4 +1,4 @@
-// server.ts — EVERY APP'S WORKER (dash, agents, notes, voice, kit, admin): its src/server.ts, Start's
+// server.ts — EVERY APP'S WORKER (dash, agents, notes, voice, admin): its src/server.ts, Start's
 // server entry, is `appServerEntry(handler, { … })` with only what the app does differently.
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";

@@ -15,9 +15,6 @@ test.for([
   // the root manifest only: an app's own package.json is inside its app's pattern
   { files: ["apps/spa/package.json"], preview: false },
   { files: ["docs/depot-ci.md", "lint/rules/no-describe.ts"], preview: false },
-  // firmware ships as GitHub releases, never in Kit's Worker
-  { files: ["apps/kit/firmware/main/main.c"], preview: false },
-  { files: ["apps/kit/firmware/main/main.c", "apps/kit/src/server.ts"], preview: true },
   { files: [".depot/workflows/lint-typecheck.yml", "scripts/ci/preview-paths.ts"], preview: false },
   { files: [], preview: false },
 ])("a pull request changing $files gets a preview: $preview", ({ files, preview }) => {

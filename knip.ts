@@ -110,7 +110,7 @@ export default {
     },
     // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
     ...Object.fromEntries(
-      ["admin", "dash", "docs", "kit", "notes", "voice"].map((app) => [
+      ["admin", "dash", "docs", "notes", "voice"].map((app) => [
         `apps/${app}`,
         {
           entry: ["scripts/**/*.ts"],

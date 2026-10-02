@@ -83,7 +83,6 @@ test("a deployment is derived from its name alone: eight plain workers on the de
       docs: "https://pr3144-a1b2c3d-docs.iterate-dev-preview.workers.dev",
       admin: "https://pr3144-a1b2c3d-admin.iterate-dev-preview.workers.dev",
       voice: "https://pr3144-a1b2c3d-voice.iterate-dev-preview.workers.dev",
-      kit: "https://pr3144-a1b2c3d-kit.iterate-dev-preview.workers.dev",
     },
   });
   // the envs.ts deployments, main on dev's workers and a bare prefix are none
@@ -91,7 +90,7 @@ test("a deployment is derived from its name alone: eight plain workers on the de
     expect(previewDeployment(name)).toBeUndefined();
 });
 
-test("the apps on top are the deployment's seven clients", () => {
+test("the apps on top are the deployment's six clients", () => {
   expect(APPS.map((app) => app.name).toSorted()).toEqual([...PREVIEW_DEPLOYMENT_APPS].toSorted());
 });
 

@@ -33,39 +33,23 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
-/** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
- *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
- *  Cloudflare resources. */
-export interface KitEnv {
-  cloudflareAccountId: string;
-  /** Doppler config (project `kit`) supplying deploy credentials. */
-  dopplerConfig: string;
-  workerName: string;
-  baseUrl: string;
-  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`), as every Start app's. Unset ⇒ no PostHog. */
-  posthogProjectKey?: string;
-}
-
-export const kitEnvs = {
-  // KIT AT MAIN on the dev/preview account, signed in against osEnvs.preview and
-  // redeployed in place with it (preview-parents.yml). A PR's kit is its own worker (`previewDeployment`). Every kit lists and
-  // flashes the same GitHub releases as production (apps/kit/src/firmware/releases.ts).
+/** KIT, the voice boards' firmware and their browser installer, deployed from its own repository,
+ *  iterate/kit (its envs.ts), never from here. Its Workers are listed so this repository's tooling
+ *  knows them: their origins are our own zones (scripts/lib/start-app.ts `ownZones`), the prd fault
+ *  alarm watches `kiterate`, and the preview sweep counts `kit` as known. */
+export const kitWorkers = {
+  // Kit at iterate/kit's main, signed in against osEnvs.preview
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
-    dopplerConfig: "preview",
     workerName: "kit",
     baseUrl: "https://kit.iterate-dev-preview.workers.dev",
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
-    dopplerConfig: "prd",
-    // The production account's workers.dev subdomain is `iterate`, making
-    // this worker available at kiterate.iterate.workers.dev as well.
     workerName: "kiterate",
     baseUrl: "https://k.iterate.com",
-    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
   },
-} satisfies Record<string, KitEnv>;
+};
 
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
@@ -287,7 +271,6 @@ export const PREVIEW_DEPLOYMENT_APPS = [
   "docs",
   "admin",
   "voice",
-  "kit",
 ] as const;
 
 /** `<prefix>-<sha7>`: a prefix of lowercase words (`pr3144`, `main`, `real-model`), at most 28

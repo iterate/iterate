@@ -2,7 +2,7 @@
 # THE TOOLCHAIN ON DEPOT'S STOCK IMAGE (docs/depot-ci.md#setup-on-depots-stock-image): Node, pnpm
 # and the Doppler CLI, each at the version this checkout declares. Plain shell.
 #
-#   bash scripts/ci/toolchain.sh node    Node alone, on the PATH ($GITHUB_PATH): Kit Firmware's jobs.
+#   bash scripts/ci/toolchain.sh node    Node alone, on the PATH ($GITHUB_PATH), for a job that runs nothing else.
 #   bash scripts/ci/toolchain.sh start   Node, then pnpm and the Doppler CLI fetched in the background,
 #                                        so the fetch overlaps the restore of pnpm's store
 #                                        (.depot/actions/setup).

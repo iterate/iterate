@@ -4,7 +4,7 @@
 // iterate/api does not name it. Importing this package registers the root on iterate/api's
 // `InstalledAppRoots`, and a caller that knows voice is installed writes
 // `itx as IterateContextApiWith<"voice">`. worker.ts `implements VoiceApi`; Kit's firmware calls
-// `setupVoiceAgent` over the wire (apps/kit/firmware/components/voice/src/voice_loop.c).
+// `setupVoiceAgent` over the wire (iterate/kit's firmware/components/voice/src/voice_loop.c).
 import type { z } from "zod";
 import type { ScreenImageInput, ScreenInfo } from "./screen.ts";
 

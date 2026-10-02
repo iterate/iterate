@@ -47,7 +47,6 @@ const SIGNALS = [
   "main e2e",
   "DO cost",
   "context sweep",
-  "Kit Firmware",
   "OS crash hunt",
   "real-model e2e",
   "slow e2e rows",

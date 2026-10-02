@@ -272,7 +272,7 @@ test("the operator bearer is /api's alone: refused at /mcp and on a project host
 });
 
 test("a device's key is listed as the device; an expiring key is refused past its expiry; a mint names a live project and a future expiry", async () => {
-  // a device's client metadata document, as Kit publishes one per device (apps/kit/src/device-auth.ts)
+  // a device's client metadata document, as Kit publishes one per device (iterate/kit's src/device-auth.ts)
   fetchReaches((url) => {
     if (url.href === "https://kit.test/devices/missing.json")
       return new Response("Not found", { status: 404 });

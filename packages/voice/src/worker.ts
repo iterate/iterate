@@ -112,7 +112,7 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
         data: bytesToBase64(bitmap.subarray(offset, expected)),
       });
       // The chunk that completes the frame is answered once the panel shows it, and fails if the
-      // refresh fails (apps/kit/firmware/components/capabilities/src/screen.c). Its bound is the
+      // refresh fails (iterate/kit's firmware/components/capabilities/src/screen.c). Its bound is the
       // screen's refreshTimeoutMs on top of the slowest round trip an earlier chunk took.
       let refreshDeadline: ReturnType<typeof setTimeout> | undefined;
       const acknowledged = await (expected < bitmap.length
