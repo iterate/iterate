@@ -8,10 +8,10 @@ base: main
 
 From Misha and Jonas's Tuple call (2026-10-01): configs that depend only on core go in
 `iterate/core` as starter examples and documentation; the default config must depend on nothing
-outside core. It follows #3493 (the public copies, merged), which predates the call and baked
+outside core. It follows iterate/iterate#3493 (the public copies, merged), which predates the call and baked
 `configs/default` and `configs/heartbeat` from iterate/packages with `--template`.
 
-Status: done (#3496). Agents is `iterate/agents`, core's configs live in `core/configs` and every
+Status: done (iterate/iterate#3496). Agents is `iterate/agents`, core's configs live in `core/configs` and every
 build bakes them, voice is the `configs/voice` template, and the setup prompt adds voice to a
 user's existing config. CI, the preview's e2e rows (the voice rows included) and the browser specs
 are green.
@@ -34,7 +34,7 @@ are green.
   The voice e2e rows and browser spec name the Voice preset.
 - **Core's build bakes `core/configs/*` itself**, whatever else it is given. `--template` stays for
   templates from outside core. A bare `pnpm --filter os build` offers core's configs. This undoes
-  part of #3492, where a bare build offered no presets.
+  part of iterate/iterate#3492, where a bare build offered no presets.
 - **`core/os/src/project/minimal-config.ts` goes**: a creation that names no template is seeded
   from `core/configs/minimal`, baked by the build.
 

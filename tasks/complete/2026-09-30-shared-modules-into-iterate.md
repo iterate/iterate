@@ -47,4 +47,4 @@ Status: done. All three are `iterate` subpaths; apps/os's remaining packages/sha
 ## Implementation notes
 
 - packages/shared's depot-api.ts and pkg-pr-new.ts import `iterate/platform-retry` (shared already
-  depends on iterate since #3466).
+  depends on iterate since iterate/iterate#3466).

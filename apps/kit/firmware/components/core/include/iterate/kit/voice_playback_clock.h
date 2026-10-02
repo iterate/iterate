@@ -25,7 +25,7 @@ extern "C" {
  * far behind realtime playback has fallen, and it is the only honest measure
  * of "behind" — queue depth is not, because a whole answer legitimately
  * arrives at once and a deep queue then means the sender was fast. When the
- * board and a since-deleted host CLI (#2710) each kept that timeline
+ * board and a since-deleted host CLI (iterate/iterate#2710) each kept that timeline
  * themselves, beside this clock, each had to remember, at every place an
  * answer ends, to start the next one from zero — and each forgot a different
  * place. The board forgot ordinary turns until 2026-09-06 (two boards played

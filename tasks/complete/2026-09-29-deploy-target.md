@@ -6,7 +6,7 @@ size: medium
 
 Status: done. `deployApp` and `resolveEnvContext` take one named env; every caller and the one test double updated. CI is the remaining check: the preview deploy runs apps/os `deploy.ts` through the new `deployApp`.
 
-Replaces closed PR #3201. That PR's `--env`/`DOPPLER_CONFIG` half has since landed on main through other PRs. This is the API cleanup that remains, redone from main.
+Replaces closed PR iterate/iterate#3201. That PR's `--env`/`DOPPLER_CONFIG` half has since landed on main through other PRs. This is the API cleanup that remains, redone from main.
 
 ## Problem
 

@@ -87,7 +87,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
 | `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
 | `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
-| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2                  |
+| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes the [flake dashboard](https://github.com/iterate/iterate/issues/2580) from the flake records in R2    |
 | `ci-telemetry.yml`    | Hourly, dispatch                                 | One PostHog event per Depot workflow run and job attempt                                                         |
 | `release.yml`         | Daily, dispatch                                  | A dated `v…` release with a changelog when main moved                                                            |
 | `shadcn-drift.yml`    | PR touching the vendored shadcn files, dispatch  | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)                   |
@@ -388,7 +388,7 @@ before changing a size, and the retries too before adding Playwright workers or 
 | Size (label)                    | Jobs                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `8x32` (`depot-ubuntu-24.04-8`) | Lint and Typecheck (four checks in parallel), Test, Deploy preview (seven client builds side by side)                                               | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`. Deploy preview's builds take 5–7 s against 9–12 s on a `4x16`, and it reaches the readiness gate 21.6/24.6 s p50/p90 after it starts against 25.3/28.4 s (n=5 each, 2026-09-27) |
-| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers), Kit Firmware's legs                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
+| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers), Kit Firmware's legs                                                                   | iterate/iterate#3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                               |
 | `2x8` (`depot-ubuntu-24.04`)    | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                                                                                                                                                                                                       |
 
 ## Kit firmware releases
@@ -516,7 +516,7 @@ workflow files, and registers the `on:` triggers from the default branch
 
 So every pull-request job runs the run's own commit, the tree its workflow file came from, never
 `head.sha`: main's workflow against the PR's older code fails every PR not rebased past a change
-that needs code landing with it (#2999: main's `test.yml` named a workspace the PR heads lacked).
+that needs code landing with it (iterate/iterate#2999: main's `test.yml` named a workspace the PR heads lacked).
 `depot-workflows.test.ts` enforces each checkout:
 
 - Lint and Typecheck, Test, LOC report, the PR dashboard and Kit Firmware's Plan and build legs
@@ -528,7 +528,7 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
   the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the preview's
   name use the PR head.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
-  unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
+  unmerged PR's head. An unmerged head older than a main change runs the old teardown (iterate/iterate#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
 
 So a PR's checks cover the PR merged into main at the push: a semantic conflict is a real red. A
@@ -542,7 +542,7 @@ main's file against the PR merged into main now, and a Preview delete dispatch t
 GitHub builds no test merge commit for a PR that conflicts with main, and Depot starts no workflow
 without one: it records a run with no commit and one failed workflow with no name or jobs (its
 error says the merge ref is stale), and the PR shows no Lint and Typecheck, Test or Preview OS
-checks at all (#3007 sat with only Bugbot's check until rebased).
+checks at all (iterate/iterate#3007 sat with only Bugbot's check until rebased).
 
 The **Merges with main** check (`.github/workflows/merges-with-main.yml`, rules in
 `scripts/ci/merges-with-main.ts`) closes that gap. GitHub Actions starts `pull_request_target`
@@ -645,7 +645,7 @@ same names.
 
 With Playwright's full parallelism a spec starts as soon as a worker is free, so when
 `shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
-longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
+longest spec. Each shard is a `4x16` with six workers (the density iterate/iterate#3258 measured), so there are
 `ceil(specs / 6)` shards: 10 for 58 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
 fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
@@ -664,7 +664,7 @@ fullest shard holds `ceil(specs / shards)`.
   way its verdict comes about a second after it. In the CI trace the shards sit under its row,
   below its own steps in one **Coordinate shards** row, where its wait for them is nearly all.
 - Cost: every shard waits out the deploy on its own `4x16`, and Browser specs on a `2x8`. More
-  workers against one preview have raised retries before (#3258), so compare the retried specs per
+  workers against one preview have raised retries before (iterate/iterate#3258), so compare the retried specs per
   run before and after changing the count.
 
 ### Suites start with the run

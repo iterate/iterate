@@ -443,7 +443,7 @@ export function environmentFaviconHref(environment: DeploymentEnvironment, produ
 
 /**
  * Preview: purple, the PR number in white as large as the square allows (PR numbers run to four
- * digits and more, too many for the corner badge #2197 drew for single-digit preview slots).
+ * digits and more, too many for the corner badge iterate/iterate#2197 drew for single-digit preview slots).
  * Dev: teal, the white iterate mark (core/os/public/iterate-logo.svg's paths).
  */
 export function environmentFaviconSvg(

@@ -5,9 +5,9 @@ size: large
 
 # The public `iterate/core` and `iterate/packages`: one-way copies
 
-The payoff of the core pre-work. `core/` builds from a clone of itself (#3486, #3487, #3489,
-#3492), so it can be copied to a public `iterate/core` after every production deploy, with
-Copybara, as the experiment (#3434, iterate/os0929) proved; `packages/` and the project templates
+The payoff of the core pre-work. `core/` builds from a clone of itself (iterate/iterate#3486, iterate/iterate#3487, iterate/iterate#3489,
+iterate/iterate#3492), so it can be copied to a public `iterate/core` after every production deploy, with
+Copybara, as the experiment (iterate/iterate#3434, iterate/os0929) proved; `packages/` and the project templates
 in `configs/` go to a public `iterate/packages` the same way. Nothing flows back.
 
 Status: done, pending the first copies. Both copies, their checks, the PR check and the
@@ -45,7 +45,7 @@ differences for the real thing, my calls where Misha didn't say:
 - **Messages:** the PR title with `(iterate/iterate#N)`, and only the paragraphs a PR body wraps
   in `<!-- copybara -->` … `<!-- /copybara -->`, then Copybara's `GitOrigin-RevId` trailer.
 - **The self-host recipe clones iterate/core.**
-- **The experiment stays as it is** (#3434, os0929, packages0929) until this one has run on main;
+- **The experiment stays as it is** (iterate/iterate#3434, os0929, packages0929) until this one has run on main;
   closing and deleting them is Misha's call.
 
 ## Checklist
@@ -74,7 +74,7 @@ differences for the real thing, my calls where Misha didn't say:
 - The root generator broke twice on today's main, both now handled: pnpm's first pass rewrites
   the scratch workspace with single-quoted keys (the patch filter matched double quotes only), and
   `cleanupUnusedCatalogs` drops `@codemirror/state` from the copy's catalog while an override still
-  names it (core/os stopped using packages/ui in #3486). The workspace is now edited as a YAML
+  names it (core/os stopped using packages/ui in iterate/iterate#3486). The workspace is now edited as a YAML
   document: patches and overrides of packages the copy doesn't resolve are dropped.
 - Not done, Misha's call: rulesets on both copies that refuse pushes from anyone but the App, so
   nobody edits the copy by hand (the sync check catches it, and the next copy overwrites it).

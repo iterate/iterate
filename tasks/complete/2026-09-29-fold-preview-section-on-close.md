@@ -4,7 +4,7 @@ size: small
 
 # Fold the PR body's preview section when the PR closes
 
-Status: done. The close's delete folds the section as "Deleted deployment"; PR #3438.
+Status: done. The close's delete folds the section as "Deleted deployment"; PR iterate/iterate#3438.
 
 Closing a PR deletes its preview deployments (preview-delete.yml, `pnpm preview delete`), but the PR body's `os-preview` section keeps linking to them: every link in a closed PR's body is dead.
 

@@ -5,7 +5,7 @@ size: medium
 
 # What a `run` script writes says who asked for it
 
-Status: done, in review (#3471). Events a `run` script appends carry `source.onBehalfOf` (the
+Status: done, in review (iterate/iterate#3471). Events a `run` script appends carry `source.onBehalfOf` (the
 requester, their grant, the run), from a signed token on the run's cause; Docs reads it. A script's
 commit that names no `author` is authored by the requester. Runs a script requests (its own
 `itx.cd(path).run`, or a redirect) stay attributed; runs nobody asked for stay the project's. Not
@@ -80,7 +80,7 @@ panel's "/ · Claude Code" becomes "misha · Claude Code".
   meaning.
 - **Run the script as the requester** (set `Caller.principal`). The script could then do whatever
   the person can, not just what loaded code can. Much bigger change; not what we're after.
-- **Only `source.cause.parent`** = the run request (#3442's parent, not set for runs today), and
+- **Only `source.cause.parent`** = the run request (iterate/iterate#3442's parent, not set for runs today), and
   let readers look the requester up. No new field, but every reader does a lookup per event.
 - **Do nothing in core; agents self-declare** (`via`, commit `author`). Unverifiable, and every app
   re-solves it.

@@ -422,7 +422,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(() => getOsEnv("pr3144")).toThrow('core/os: unknown env "pr3144"');
 });
 
-// Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then
+// Preview OS deploys of iterate/iterate#2934, iterate/iterate#2939 and iterate/iterate#2943 (2026-09-24): the PR head's older lockfile, then
 // the merge commit's, rewrote pnpm-lock.yaml over node_modules baked from that same content.
 test("the fresh-install check: a lockfile rewritten after the install, byte-identical to the one installed, passes", () => {
   expect(

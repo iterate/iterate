@@ -12,7 +12,7 @@ size: small
 The trace job (`.depot/workflows/preview-os.yml`, `.depot/workflows/main-os-e2e.yml`) posts a "CI
 trace" commit status linking the run's trace in the ci-reports viewer. `scripts/ci/tracing/cli.ts`
 `publish` sets its state from the run's verdict: `failure` when the trace has a time to red, `error`
-when it has no verdict (cancelled). So one failing test shows as two red checks, e.g. on #3497 one
+when it has no verdict (cancelled). So one failing test shows as two red checks, e.g. on iterate/iterate#3497 one
 e2e row failed and the Auto-fix watcher reported both "Preview OS / E2E tests" and "CI trace".
 
 The docs already say a status means the report exists and the run's own checks carry the verdict

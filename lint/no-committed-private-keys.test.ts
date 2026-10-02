@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 // fails this test, naming the file and line. A header on its own — a doc comment, or a stub a test
 // feeds a parser to be refused — is fine. A throwaway key a test or a preview needs is generated
 // where it is used (node:crypto `generateKeyPairSync`) or read from Doppler at deploy time. GitHub's
-// secret scanning raised "Generic Private Key" on a throwaway preview key committed in #3063
+// secret scanning raised "Generic Private Key" on a throwaway preview key committed in iterate/iterate#3063
 // (2026-09-24). Deliberately dumb and fast: git ls-files plus a line scan.
 
 const repoRoot = resolve(import.meta.dirname, "..");

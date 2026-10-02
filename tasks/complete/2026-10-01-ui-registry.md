@@ -22,7 +22,7 @@ Status: done. Marked ready for review on 2026-10-01.
   rendered components ship as a shadcn registry and each app keeps its own copy ("the other apps
   will all have their own copy of a button and so on, but that doesn't bother me one bit"). On
   10/01 they agreed that iterate/packages, the public one-way copy of `packages/`, is the registry.
-- #3493: Copybara copies `packages/**` to github.com/iterate/packages after each Deploy OS run, and
+- iterate/iterate#3493: Copybara copies `packages/**` to github.com/iterate/packages after each Deploy OS run, and
   `packages/ui/**` is in Deploy OS's path filter. So a change to the registry is public after the
   next deploy, at the same path.
 - shadcn's vendored components stay upstream's. Our items name them in `registryDependencies`
@@ -153,7 +153,7 @@ Not in the registry:
 - The round trip's local server runs in the same process as the CLI call, so that call has to be
   async: `spawnSync` deadlocked it.
 - Adding `oxc-parser` to packages/ui made pnpm re-resolve crossws's optional `srvx` peer across the
-  lockfile (#3494 flipped it the other way). Hosting the script in `scripts/ci`, which already
+  lockfile (iterate/iterate#3494 flipped it the other way). Hosting the script in `scripts/ci`, which already
   depends on oxc-parser, avoided that churn.
 - TypeScript 7 has no JS API (`ts.preProcessFile` is gone), hence oxc-parser for imports.
 - One-off end-to-end proof (not in CI): a fresh app with `@/` aliases and base-nova installed all

@@ -778,7 +778,7 @@ static bool playback_apply_reprime(
  * prime, take one frame, treat a dry ring as a hole or the end, skip a late
  * frame with backlog behind it, hand the rest to the speaker, report what was
  * played. When it was written here and again in a since-deleted host CLI
- * (#2710), the two copies drifted apart twice. What is below is only what is
+ * (iterate/iterate#2710), the two copies drifted apart twice. What is below is only what is
  * the board's alone: the FreeRTOS queue with its generations and reprime
  * handshake, and the codec write with its bounded wait for DMA headroom.
  */
