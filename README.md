@@ -1,44 +1,23 @@
-# Iterate
+# iterate/iterate (archived)
 
-The Iterate context platform runs at **https://os.iterate.com**. `core/os` owns the Worker, OAuth issuer, project contexts, streams, and loaded code.
+This was iterate's monorepo from September 2025 to 2026-10-02. It's now a read-only archive: about 3,100 commits, every pull request and issue, and the code as of that day.
 
-`core/` and `packages/` are public: Copybara copies them to [iterate/core](https://github.com/iterate/core) and [iterate/packages](https://github.com/iterate/packages) (`copybara/copy.bara.sky`). `internal-packages/` holds what stays private.
+iterate is now developed in one private repo, [iterate/private](https://github.com/iterate/private), which only the iterate team can see. Parts of it are copied, one way, to two public repos:
 
-| Path                              | Purpose                                                         |
-| --------------------------------- | --------------------------------------------------------------- |
-| `core/os`                         | Platform Worker and its issuer pages (sign-in, consent)         |
-| `core/lib`                        | `iterate/*` SDK, the agents app and the `iterate` CLI           |
-| `core/configs`                    | The project templates every build offers                        |
-| `configs`                         | iterate's templates that need packages (voice)                  |
-| `packages/dash`                   | Projects, organizations, sessions, and personal access tokens   |
-| `packages/agents-app`             | Agent conversations and inspection                              |
-| `packages/notes`                  | Notes client                                                    |
-| `packages/docs-app`               | Docs client: a project's markdown docs, served like Notes       |
-| `packages/voice-app`              | Voice client                                                    |
-| `packages/admin`                  | Every project and person, and a raw context explorer            |
-| `packages/spa`                    | Static SPA archetype; also hosts the browser extension download |
-| `packages/browser-extension`      | Chrome side panel that lends a browser to a project             |
-| `packages/voice`                  | Voice on the agents app, installed too (`@iterate-com/voice`)   |
-| `packages/github-sync`            | Config repo ↔ GitHub, one history (`@iterate-com/github-sync`)  |
-| `packages/docs`                   | Docs' co-editing processors (`@iterate-com/docs`)               |
-| `packages/ai-linter`              | Pull requests against `rules/` (`@iterate-com/ai-linter`)       |
-| `packages/petshop-sdk`            | The dummy petshop's SDK, shaped like a vendor's                 |
-| `packages/ui`                     | Components used by the apps                                     |
-| `packages/shared`                 | Shared configuration, events, and test telemetry                |
-| `internal-packages/dummy-petshop` | Deployed OAuth/API fixture that the OS e2e tests use            |
-| `internal-packages/ci-reports`    | Opens CI traces and Playwright reports from Depot artifacts     |
-| `test/playwright`                 | Browser specs across the apps (`pnpm spec`)                     |
-| `scripts`                         | Deployment helpers and CI support                               |
-| `lint`, `rules`                   | Review and lint rules                                           |
+- [iterate/core](https://github.com/iterate/core): the platform. The Worker behind os.iterate.com (`core/os`), the `iterate` SDK and CLI (`core/lib`), and the project templates every build offers (`core/configs`). Start here to self-host.
+- [iterate/packages](https://github.com/iterate/packages): the first-party apps (dash, notes, docs, agents, voice and more), what you install into a project (voice, docs, GitHub sync, the AI linter), the shadcn component registry (`packages/ui`), and the templates that use them (`configs/`).
 
-```sh
-pnpm install
-pnpm dev
-pnpm typecheck
-pnpm test
-pnpm spec
-```
+Paths match: `core/os/src/...` here is `core/os/src/...` in iterate/core. The rest (`internal-packages/`, `test/`, `scripts/`, `docs/`, `tasks/`, CI) isn't copied, so this archive is its last public version. A few apps have repos of their own, like [iterate/kit](https://github.com/iterate/kit) and iterate/mobile.
 
-`pnpm dev` starts the platform locally, attached to the terminal. `pnpm dev start --detach` runs it in the background instead (`pnpm dev status`, `attach`, `kill`, `restart`), on this worktree's last port, else 8788, else a free one. `pnpm getin` opens a browser signed in as `test@preview.iterate.test` on project `test`, starting the server and creating the person and project when missing: the local Dash's project page when a Dash wired to this server is up (`APP_CONFIG_URLS__OS` pointed at the platform, see [packages/dash](packages/dash/README.md)), else the platform's `/login`. `pnpm -s getin --print` prints that sign-in URL alone, for Playwright and agents. `pnpm --dir <app> <script>` runs an app's script, such as `pnpm --dir core/os test:watch`, and `pnpm --dir apps/<name> dev` runs a client; its issuer configuration must point to the platform under test. See [platform configuration and development](core/os/README.md), [self-hosting](core/os/SELF-HOSTING.md), and [testing](docs/testing.md).
+## Why
 
-`envs.ts` owns deployment names, URLs, and resource IDs. Doppler supplies secrets; `doppler.yaml` maps directories to projects. Deploy and resource commands live in each app. The Preview OS workflow runs per-PR previews through `pnpm preview`.
+We're following a setup to similar to Ryan Dahl's [for celld](https://x.com/rough__sea/status/2092091242377265562): the public repo is a lean export, and the tests, CI, ops scripts and working notes live in a private repo. Agents running on iterate read iterate/core to understand the platform they run on, and a small repo is easier to read than this one.
+
+## If you used this repo
+
+- **Links** to files here still work, and show the code as of 2026-10-02. The current version is at the same path in iterate/core or iterate/packages.
+- **Package builds** from this repo (`https://pkg.pr.new/iterate/iterate/...`) stop updating, and pkg.pr.new removes old builds after a while. New builds are at `https://pkg.pr.new/iterate/private/...`.
+- **Self-hosting**: give your coding agent https://os.iterate.com/setup-prompt.md. It clones iterate/core.
+- **Bugs and requests**: open an issue on [iterate/core](https://github.com/iterate/core/issues) or [iterate/packages](https://github.com/iterate/packages/issues). Got a fix? Push it to a fork and link the compare view in the issue.
+
+The last commit here renames the CI folders to `.depot.archived/` and `.github.archived/`, so nothing in this repo runs, but you can still read how it was wired. Licenses are unchanged: AGPL-3.0 ([LICENSE](LICENSE)), except folders with an Apache-2.0 LICENSE of their own (the SDK, the packages and the templates).
