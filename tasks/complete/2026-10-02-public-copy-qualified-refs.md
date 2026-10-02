@@ -5,9 +5,8 @@ size: small
 
 # The public copies name PRs and issues as owner/repo#N
 
-**Status:** implemented; red by design. The test fails on main with 31 refs in 17 files, which
-iterate/iterate#3509 fixes, and passes on iterate/iterate#3509's tree. Left: merge main once
-iterate/iterate#3509 lands, and see it green.
+**Status:** done. The test failed on main with 31 refs in 17 files; with iterate/iterate#3509
+merged into this branch, it passes.
 
 The public copies (iterate/core, iterate/packages; `copybara/copy.bara.sky`) hold `core/`,
 `packages/`, `configs/` and a few root files. A bare `#N` there names an iterate/iterate PR,
@@ -46,4 +45,5 @@ PR, which is what it'll be written to mean.
 - [x] the new test: fails on main with the 30 lines iterate/iterate#3509 fixes, passes on
       iterate/iterate#3509's head _31 refs on 30 lines; 2 passed with the file copied into
       iterate/iterate#3509's worktree_
-- [ ] PR stays red until iterate/iterate#3509 merges; then merge main and check it's green
+- [x] PR stays red until iterate/iterate#3509 merges; then merge main and check it's green
+      _merged main at bbd8934e0; 2 passed locally_
