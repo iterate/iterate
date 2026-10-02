@@ -62,8 +62,9 @@ test("a public copy names a PR or issue as owner/repo#N, never a bare #N", () =>
 
 // Nothing in a public copy looks like a key or an id: a UUID, a long hex, base64 or digit run, a
 // token's or a key's own shape. An account id or an analytics key belongs in iterate/private
-// (envs.ts), a secret in Doppler. Obvious test data passes, by entropy: `aaaaaaaaaaaaaaaaaaaa`,
-// `00000000-0000-4000-8000-000000000001`, `1700000000`. A string that has to stay takes a line
+// (envs.ts), a secret in Doppler. Obvious test data passes: few distinct characters
+// (`00000000-0000-4000-8000-000000000001`, `1700000000`) or runs of one
+// (`aaaaabbbbbccccc111112222233333aaaaabbbbb`). A string that has to stay takes a line
 // above it saying `allow-high-entropy-next-line: <why>`, in the file's own comment syntax. The
 // copied lockfile's package checksums, and a patch's `index <blob>..<blob>` lines (git's ids of the
 // npm package's files), are not ours. Fails naming each file, line and string.
@@ -135,19 +136,25 @@ function highEntropyStrings(line: string) {
   // a key's or a token's own shape, whatever its entropy
   for (const pattern of KEY_SHAPES) check(pattern, line, () => true);
   check(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, line, (uuid) => {
-    return bitsPerCharacter(uuid.replaceAll("-", "")) >= 2.5;
+    return looksRandom(uuid.replaceAll("-", ""), 2.5);
   });
   // 16 is a personal access token's id (`pat_<16 hex>`); minted ids and Cloudflare's are 32
-  check(/(?<![0-9A-Za-z])[0-9a-f]{16,}(?![0-9A-Za-z])/gi, line, (hex) => {
-    return bitsPerCharacter(hex) >= 2.5;
-  });
+  check(/(?<![0-9A-Za-z])[0-9a-f]{16,}(?![0-9A-Za-z])/gi, line, (hex) => looksRandom(hex, 2.5));
   // URLs blanked out first: a path like `docs/Web/API/CanvasRenderingContext2D` reads as base64
   const outsideUrls = line.replaceAll(/https?:\/\/\S+/g, (url) => " ".repeat(url.length));
   check(/(?<![\w+/-])[\w+/-]{32,}={0,2}(?![\w+/=-])/g, outsideUrls, (run) => {
     return /[A-Z]/.test(run) && /[a-z]/.test(run) && /\d/.test(run) && bitsPerCharacter(run) >= 4.2;
   });
-  check(/(?<![\w.])\d{9,}(?!\w)/g, line, (digits) => bitsPerCharacter(digits) >= 2);
+  check(/(?<![\w.])\d{9,}(?!\w)/g, line, (digits) => looksRandom(digits, 2));
   return found;
+}
+
+/** Whether a string could be random rather than typed: enough bits per character, and a new
+ *  character at more than half its positions. A typed fake (`aaaaabbbbbccccc`) changes character
+ *  every 5; a random id almost every time. */
+function looksRandom(text: string, minimumBits: number) {
+  const runs = [...text].filter((character, index) => character !== text[index - 1]).length;
+  return bitsPerCharacter(text) >= minimumBits && runs * 2 > text.length;
 }
 
 /** Shannon entropy in bits per character: 0 for `0000`, 4 for hex using every digit equally. */

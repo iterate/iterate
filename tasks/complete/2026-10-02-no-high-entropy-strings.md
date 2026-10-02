@@ -29,9 +29,10 @@ folders we hard-code non-secret ids like the Cloudflare account id on purpose.
   else gets a marker comment on the line above, in whatever comment syntax the file has:
   `allow-high-entropy-next-line: <why>`. A made-up `eslint-disable-next-line iterate/…` would fail
   oxlint's unused-directive check, so the marker is our own.
-- **Obvious test data passes.** UUIDs, hex and digit runs are flagged only above an entropy floor,
-  so `00000000-0000-4000-8000-000000000001`, 40 zeros and `1700000000` pass, and a real id
-  (or a sequential fake like `0123456789abcdef…`) doesn't.
+- **Obvious test data passes.** UUIDs, hex and digit runs are flagged only above an entropy floor
+  and when they change character at more than half their positions, so
+  `00000000-0000-4000-8000-000000000001`, `aaaaabbbbbccccc111112222233333aaaaabbbbb` and
+  `1700000000` pass, and a real id (or a sequential fake like `0123456789abcdef…`) doesn't.
 - **Keep the long-number check**, exempting the few that need to stay.
 
 ### What it flags
@@ -113,3 +114,8 @@ Not caught by any entropy check, and not secret: personal emails in
   oauth and personal-access-tokens tests (after `pnpm os:build`).
 - Fakes are hardcoded literals, not `.repeat()` calls (Misha, 2026-10-02): a run of one character
   has 0 bits of entropy, so a literal of 40 `a`s passes the check.
+- Fakes come in groups of 5, cycling a b c 1 2 3: `aaaaabbbbbccccc111112222233333aaaaabbbbb`
+  (Misha, 2026-10-02). Six characters scored exactly the 2.5-bit floor, so a UUID, hex or digit
+  string now also has to change character at more than half its positions to count as random.
+  Real ids are missed no more often than before (same 200k-sample rates); `0123456789abcdef…` is
+  still flagged.

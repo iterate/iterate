@@ -32,7 +32,7 @@ import {
 } from "./git-wire.ts";
 
 /** A tip the fake remote's ls-refs names. */
-const TIP = "dddddddddddddddddddddddddddddddddddddddd";
+const TIP = "aaaaabbbbbccccc111112222233333aaaaabbbbb";
 
 // ── git wire ── the wire's one refusal that matters to the repo facet: a TRUNCATED pkt-line body is
 // an outage, never an empty ref list (an empty list reads as "unborn repo" → "no file", which would
@@ -308,7 +308,7 @@ test("commitReaches: along every parent within the objects, and onto a parent th
       committer: { name: "a", email: "a@example.com" },
       message,
       parents,
-      tree: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      tree: "aaaaabbbbbccccc111112222233333aaaaabbbbb",
     });
     const oid = await hashObject("commit", payload);
     objects.set(oid, { oid, type: "commit", payload });

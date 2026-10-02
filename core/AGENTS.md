@@ -16,4 +16,4 @@ build offers (`configs/`).
   and browser tests (`test/`), tasks and CI.
 - **No ids or keys**, here or in `packages/`, tests included: no UUID, account id, key, or long hex,
   base64 or digit string (`lint/public-copies.test.ts`). An id goes in `envs.ts`, a secret in
-  Doppler; a test uses an obvious fake (`00000000-0000-4000-8000-000000000001`).
+  Doppler; a test uses an obvious fake (`aaaaabbbbbccccc111112222233333aaaaabbbbb`).

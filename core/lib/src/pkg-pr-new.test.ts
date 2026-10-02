@@ -1,7 +1,7 @@
 import { expect, onTestFinished, test, vi } from "vitest";
 import { buildStanding, pinPkgPrNewVersion, pkgPrNewVersion } from "./pkg-pr-new.ts";
 
-const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const commit = "aaaaabbbbbccccc111112222233333aaaaabbbbb";
 
 test.for([
   ["a branch", "main"],
