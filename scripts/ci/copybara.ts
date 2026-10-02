@@ -1,13 +1,15 @@
 // THE ONE-WAY PUBLIC COPIES: core/ to iterate/core, and packages/ and configs/ to iterate/packages
 // (copybara/copy.bara.sky, tasks/complete/2026-10-01-core-public-copy.md).
 //
-//   node scripts/ci/copybara.ts sync --sha <deployed sha>
+//   node scripts/ci/copybara.ts sync --copy core --sha <deployed sha>
+//   node scripts/ci/copybara.ts sync --copy packages --sha <main's sha>
 //   node scripts/ci/copybara.ts check
 //   node scripts/ci/copybara.ts workspace-files [--check]
 //
-// `sync` (Deploy OS, after a production deploy) copies this repository's commits up to the deployed
-// one into each copy's main, then checks each copy holds exactly that commit's files, and that a
-// fresh clone of iterate/core passes the self-host recipe. It pushes as the iterate GitHub App, with
+// `sync` copies this repository's commits up to `sha` into one copy's main, then checks the copy
+// holds exactly that commit's files, and that a fresh clone of iterate/core passes the self-host
+// recipe. Deploy OS copies core after a production deploy; copy-packages.yml copies packages after
+// every change to them, since the apps in packages/ deploy from workflows of their own. It pushes as the iterate GitHub App, with
 // a token for the two copies and this repository, which it reads them from (getRepo: iterate/iterate,
 // then iterate/private). A copy that is empty, or whose last copied commit this repository doesn't
 // have (iterate/private starts with a fresh history), starts again from one snapshot of that commit.
@@ -49,8 +51,6 @@ const COPYBARA = {
 };
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const CONFIG = join(REPO_ROOT, "copybara/copy.bara.sky");
-/** copy.bara.sky's workflows, each named after the iterate/<repo> it pushes to. */
-const COPIES = ["core", "packages"];
 const urlOf = (copy: string) => `https://github.com/iterate/${copy}`;
 // The App's bot user (`gh api 'users/iterate[bot]'`), so its commits link to it.
 const COMMITTER = {
@@ -58,12 +58,15 @@ const COMMITTER = {
   email: "233973017+iterate[bot]@users.noreply.github.com",
 };
 
-/** Copies the commits up to `sha` into each copy, checks each is `sha`'s, and that iterate/core
+/** Copies the commits up to `sha` into `copy`, checks it is `sha`'s, and for core that iterate/core
  *  builds from a fresh clone. */
 export async function sync(options: {
-  /** The deployed commit to copy up to. */
+  /** The copy to make: core (Deploy OS) or packages (copy-packages.yml). */
+  copy: "core" | "packages";
+  /** The commit to copy up to. */
   sha: string;
 }) {
+  const { copy } = options;
   const source = getRepo();
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),
@@ -71,7 +74,7 @@ export async function sync(options: {
     // Copybara's fetch from this repository gets the token too: the App is installed on every
     // repository in the org, so it reads iterate/private as it does iterate/iterate. One token for
     // both, as git's credential store holds one per host; Copybara never pushes to its origin.
-    repositories: [...COPIES, source.repo],
+    repositories: [copy, source.repo],
     permissions: { contents: "write" },
   });
   console.log(
@@ -90,42 +93,42 @@ export async function sync(options: {
     const credentials = join(work, "git-credentials");
     writeFileSync(credentials, `https://x-access-token:${app.token}@github.com\n`, { mode: 0o600 });
     const withToken = ["-c", `credential.helper=store --file=${credentials}`];
-    for (const copy of COPIES) {
-      const last = (await copyHead({ copy, withToken, work }))?.copiedCommit;
-      const seed = !last || !(await hasCommit(github, last));
-      if (seed)
-        console.log(
-          `[copybara] ${copy}: ${last ? `${repository.full_name} has no ${last}, the last commit it copied` : "nothing copied yet"}; starting from a snapshot of ${options.sha}`,
-        );
-      const migrate = await copybara(config, copy, [
-        options.sha,
-        ...(seed ? await seedArgs(options.sha) : []),
-        "--git-credential-helper-store-file",
-        credentials,
-        "--nogit-prompt",
-        "--git-committer-name",
-        COMMITTER.name,
-        "--git-committer-email",
-        COMMITTER.email,
-      ]);
-      process.stdout.write(migrate.stderr);
-      if (migrate.status === 4)
-        console.log(`[copybara] ${copy}: nothing new to copy up to ${options.sha}`);
-      else if (migrate.status !== 0)
-        throw new Error(`Copybara's ${copy} exited with ${migrate.status}`);
+    const last = (await copyHead({ copy, withToken, work }))?.copiedCommit;
+    const seed = !last || !(await hasCommit(github, last));
+    if (seed)
+      console.log(
+        `[copybara] ${copy}: ${last ? `${repository.full_name} has no ${last}, the last commit it copied` : "nothing copied yet"}; starting from a snapshot of ${options.sha}`,
+      );
+    const migrate = await copybara(config, copy, [
+      options.sha,
+      ...(seed ? await seedArgs(options.sha) : []),
+      "--git-credential-helper-store-file",
+      credentials,
+      "--nogit-prompt",
+      "--git-committer-name",
+      COMMITTER.name,
+      "--git-committer-email",
+      COMMITTER.email,
+    ]);
+    process.stdout.write(migrate.stderr);
+    if (migrate.status === 4)
+      console.log(`[copybara] ${copy}: nothing new to copy up to ${options.sha}`);
+    else if (migrate.status !== 0)
+      throw new Error(`Copybara's ${copy} exited with ${migrate.status}`);
 
-      const expected = join(work, `${copy}-expected`);
-      await writeToFolder(config, copy, options.sha, expected, [
-        "--git-credential-helper-store-file",
-        credentials,
-        "--nogit-prompt",
-      ]);
-      await checkCopy({ copy, sha: options.sha, expected, withToken, work });
+    const expected = join(work, `${copy}-expected`);
+    await writeToFolder(config, copy, options.sha, expected, [
+      "--git-credential-helper-store-file",
+      credentials,
+      "--nogit-prompt",
+    ]);
+    await checkCopy({ copy, sha: options.sha, expected, withToken, work });
+
+    if (copy === "core") {
+      const clone = join(work, "clone");
+      await run("git", [...withToken, "clone", "--quiet", "--depth", "1", urlOf("core"), clone]);
+      await checkSelfHost(clone);
     }
-
-    const clone = join(work, "clone");
-    await run("git", [...withToken, "clone", "--quiet", "--depth", "1", urlOf("core"), clone]);
-    await checkSelfHost(clone);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

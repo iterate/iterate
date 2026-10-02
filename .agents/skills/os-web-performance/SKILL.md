@@ -52,7 +52,7 @@ fingerprinted `/assets/*`.
 3. Field data is prd only (previews carry no PostHog key, per `envs.ts`). Follow the PostHog
    instructions in your agent config, confirm that web-vitals events exist for the app before
    quoting p75s, and split them by route, device, and release.
-4. Inspect the production graph with `pnpm --dir apps/<app> exec vite build --manifest`, which
+4. Inspect the production graph with `pnpm --dir packages/<app> exec vite build --manifest`, which
    writes `dist/client/.vite/manifest.json`. Count modulepreloads, bytes, and requests before
    FCP/LCP.
 5. Write a red user-facing test (`test/playwright/`), make the narrowest change, prove the package tests,

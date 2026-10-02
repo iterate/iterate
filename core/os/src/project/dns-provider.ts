@@ -3,7 +3,7 @@
 // nearest name at or above it with nameservers (DNS-over-HTTPS NS lookups) — and its provider, by
 // matching those nameservers against the providers below by their customer-facing names. The zone
 // lets the dash show each record's name as the provider's form wants it (`iterate`, or `@` for the
-// zone itself); the provider is an id the dash keys its instructions by (apps/dash
+// zone itself); the provider is an id the dash keys its instructions by (packages/dash
 // `DNS_PROVIDER_GUIDES`), null for anything not listed.
 // Best effort like Domain Connect: every request bounded, a failure throws for the caller to log.
 

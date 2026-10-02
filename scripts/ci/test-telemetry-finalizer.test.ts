@@ -96,10 +96,13 @@ test("a workspace that left no artifact fails the job after the manifest is writ
 // (iterate/iterate#2969): every test passed and the finalizer failed on the workspace their head does not have.
 test("the Test job expects its checkout's test workspaces, not main's", async () => {
   using tree = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
-  writeFileSync(join(tree.path, "pnpm-workspace.yaml"), "packages:\n  - core/os\n  - apps/docs\n");
+  writeFileSync(
+    join(tree.path, "pnpm-workspace.yaml"),
+    "packages:\n  - core/os\n  - packages/docs-app\n",
+  );
   for (const [directory, packageJson] of [
     ["core/os", { name: "os", scripts: { test: "vitest run" } }],
-    ["apps/docs", { name: "docs", scripts: { build: "vite build" } }],
+    ["packages/docs-app", { name: "docs", scripts: { build: "vite build" } }],
   ] as const) {
     mkdirSync(join(tree.path, directory), { recursive: true });
     writeFileSync(join(tree.path, directory, "package.json"), JSON.stringify(packageJson));

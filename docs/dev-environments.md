@@ -151,7 +151,7 @@ read secrets.
   configured (production). The Dash and the other hosted clients are ordinary
   OAuth clients of the platform: to run one against local OS, put
   `APP_CONFIG_URLS__OS=http://localhost:8788` in its gitignored `.dev.vars` (see
-  `apps/dash/README.md`) and `pnpm --dir apps/dash dev`.
+  `packages/dash/README.md`) and `pnpm --dir packages/dash dev`.
 - Sign in as an agent/test: use the deployment's password or operator bearer
   (next section). Never script the OAuth dance by hand: the e2e fixture
   `oauthSession` in `test/helpers/principal.ts` runs the real flow
@@ -236,7 +236,7 @@ user's session (the projects of their organizations). The e2e suite's
 
 **Platform admins** are people, not the bearer: the exact emails in `APP_CONFIG`
 `admins` (`["jonas@iterate.com"]`; local dev lists `test@preview.iterate.test`).
-Signed in to the admin app (`apps/admin`), which asks for the `admin` scope, an
+Signed in to the admin app (`packages/admin`), which asks for the `admin` scope, an
 admin reaches every project and person, and the global namespace as
 `session.global` (its `cd` walks `/users/<id>…` and `/organizations/<id>…`), for
 12 hours. To use any app as someone else, sign in to it again (the account
@@ -278,7 +278,7 @@ Against a deployment, the bearer and the password are that environment's
 secrets, inside the `APP_CONFIG` of its Doppler config
 (`os/preview` for previews, `os/prd` for production).
 Read them under `doppler run`, never into a shared channel.
-`apps/agents/scripts/client.ts`, `scripts/os/control-plane-load.ts` and
+`packages/agents-app/scripts/client.ts`, `scripts/os/control-plane-load.ts` and
 `core/os/examples/serve-localhost.mjs` read `APP_CONFIG_SECRETS__ADMIN_BEARER`
 like the CLI; `scripts/os/project-seed.ts`, `seed-instance-secrets.ts`,
 `preview.ts` and `scripts/ci/context-sweep.ts` read `secrets.adminBearer` out

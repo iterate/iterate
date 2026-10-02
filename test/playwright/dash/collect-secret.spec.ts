@@ -1,4 +1,4 @@
-// The collection link's page (apps/dash/src/routes/collect-secret.$slug.tsx), end to end. The
+// The collection link's page (packages/dash/src/routes/collect-secret.$slug.tsx), end to end. The
 // `dash-phone` project runs it again at a phone's width, with touch.
 import { createHmac } from "node:crypto";
 import { expect } from "@playwright/test";

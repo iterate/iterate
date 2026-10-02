@@ -15,7 +15,9 @@ iterate/private (Misha, 2026-10-02), so the apps' source stays public after it.
 
 ## Status
 
-- Plan only so far. The move script hasn't run.
+- Nearly done: the move, the name-to-folder fixes, the packages copy's own workflow, the dead
+  links and the docs are in, and the local checks pass.
+- Left: the PR's preview and CI, review, and the first `copy-packages.yml` run after merge.
 - Every placement is decided (Misha, 2026-10-02). Kit already left for iterate/kit
   (iterate/iterate#3511).
 - Same size and shape as iterate/iterate#3487 (`mkdir core && mv apps/os core`): a scripted path
@@ -65,31 +67,42 @@ the templates.
 
 ## Plan
 
-- [ ] Move with iterate/iterate#3487's script (`tasks/apps-into-packages.move.mjs`), with this
+- [x] Move with iterate/iterate#3487's script (`tasks/apps-into-packages.move.mjs`), with this
       task's move list. It moves each file, recomputes relative imports and markdown links from the
-      new place, and rewrites path mentions. Delete the script once it has run.
-- [ ] Paths built from an app's name instead of its folder. These break once name and folder
+      new place, and rewrites path mentions. Delete the script once it has run. _210 files; the
+      script skipped the 16 images (it only reads text files), moved by hand; deleted after_
+- [x] Paths built from an app's name instead of its folder. These break once name and folder
       differ (`docs` → `packages/docs-app`):
   - `scripts/os/preview.ts:329` `path.resolve(REPO_ROOT, "apps", app.name)`: use `app.root`
   - `scripts/ci/depot-workflows.test.ts:100`: `deploy-<app>.yml` → `apps/<app>`
   - `knip.ts:114`: the Start apps' workspaces
   - `scripts/lib/start-app.ts`: `StartApp.name`'s doc ("the directory under apps/") and the
     `apps/${app.name}` error messages and `appLabel`
-- [ ] Path filters and working directories:
+  - _`appDirectory(app)` in start-app.ts (from `StartApp.root`) for preview.ts and the messages;
+    `deployedFolders` in depot-workflows.test.ts, which fails for a deploy workflow with no folder;
+    knip lists the folders_
+- [x] Path filters and working directories:
       `deploy-{dash,notes,docs,agents,voice,admin,spa}.yml` (spa's also lists the extension),
       `main-os-e2e.yml`, `preview-delete.yml`, `preview-parents.yml`, `scripts/ci/preview-paths.ts`.
       The script's rewrite covers these; `depot-workflows.test.ts` checks them against the workspace.
-- [ ] `pnpm-workspace.yaml`, `doppler.yaml`, `pnpm-lock.yaml` (importer paths).
-- [ ] `lint/public-copies.test.ts` passes: the moved apps are now in iterate/packages, so their
+      _rewritten by the script; depot-workflows.test.ts passes_
+- [x] `pnpm-workspace.yaml`, `doppler.yaml`, `pnpm-lock.yaml` (importer paths). _lockfile: importer
+      keys and two `link:` paths only, no version changes_
+- [x] `lint/public-copies.test.ts` passes: the moved apps are now in iterate/packages, so their
       markdown can't link outside it (`../../docs/…`, `../../envs.ts`), and they can't name a PR
-      as a bare `#N`. Dead links become plain paths.
-- [ ] The packages copy runs when these apps change (below).
-- [ ] `README.md` repository map, `copybara/packages/README.md` (lists the apps), the apps' READMEs.
+      as a bare `#N`. Dead links become plain paths. _9 dead links in the admin, agents, dash, docs
+      and notes READMEs: core/lib ones link iterate/core, the rest are plain paths. No bare refs_
+- [x] The packages copy runs when these apps change (below). _`.depot/workflows/copy-packages.yml`;
+      `copybara.ts sync --copy core|packages`_
+- [x] `README.md` repository map, `copybara/packages/README.md` (lists the apps), the apps' READMEs.
+      _also the creating-an-app skill, which now puts a new app in `packages/<app>`_
 - [ ] Evidence:
   - the PR's preview deploys dash, notes, docs, agents, voice and admin from their new folders
-  - the SPA has no per-PR preview: `pnpm --dir packages/spa build` zips the extension from
-    `packages/browser-extension`
-  - a `--to-folder` run of the packages copy (as `copybara.ts check` does for core) includes them
+  - [x] the SPA has no per-PR preview: `pnpm --dir packages/spa build` zips the extension from
+        `packages/browser-extension` _writes `iterate-chrome-extension-0.3.2.zip`_
+  - [x] ~~a `--to-folder` run of the packages copy (as `copybara.ts check` does for core) includes
+        them~~ _no Java 25 on this Mac; `lint/public-copies.test.ts` lists the copy's files from
+        copy.bara.sky's globs, and it now covers the apps' markdown_
 
 ### When the packages copy runs
 
@@ -142,3 +155,6 @@ Either way the copy no longer waits for a production deploy, so "after each prod
 - 2026-10-02: merged main at `70dca5cdc`: iterate/iterate#3508 (licenses, core/os docs, the
   public-copies lint), iterate/iterate#3509 (qualified PR refs) and iterate/iterate#3511 (kit gone).
   `envs.ts` keeps `kitWorkers` for the fault alarm and the preview sweep.
+- 2026-10-02: moved and checked locally: `pnpm typecheck`, `pnpm lint`, `pnpm knip`, `pnpm format`;
+  the lint workspace's tests (74); the scripts workspace's tests, whose only failures are
+  `toolchain` and `tracing` (macOS bash, as on main); agents-app's and voice-app's tests.

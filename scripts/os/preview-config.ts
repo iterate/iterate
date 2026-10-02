@@ -10,12 +10,12 @@ import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { ciReportsEnvs, kitWorkers, osEnvs, previewDeployment, spaEnvs } from "../../envs.ts";
-import { agents } from "../../apps/agents/scripts/app.ts";
-import { dash } from "../../apps/dash/scripts/app.ts";
-import { docs } from "../../apps/docs/scripts/app.ts";
-import { notes } from "../../apps/notes/scripts/app.ts";
-import { admin } from "../../apps/admin/scripts/app.ts";
-import { voice } from "../../apps/voice/scripts/app.ts";
+import { agents } from "../../packages/agents-app/scripts/app.ts";
+import { dash } from "../../packages/dash/scripts/app.ts";
+import { docs } from "../../packages/docs-app/scripts/app.ts";
+import { notes } from "../../packages/notes/scripts/app.ts";
+import { admin } from "../../packages/admin/scripts/app.ts";
+import { voice } from "../../packages/voice-app/scripts/app.ts";
 import { markedSection, replaceMarkedSection } from "../ci/markdown-annotator.ts";
 import type { StartApp } from "../lib/start-app.ts";
 
@@ -149,7 +149,7 @@ export function appSignInLink(
   return `${url.origin}/.auth/login?${query}`;
 }
 
-/** THE APPS SERVED THROUGH A PROJECT (apps/notes, apps/docs): no OAuth client, and no sign-in of
+/** THE APPS SERVED THROUGH A PROJECT (packages/notes, packages/docs-app): no OAuth client, and no sign-in of
  *  their own. A project's config worker (the app's `config-worker.ts`), or the fetch route the seed
  *  sets (`proxiedAppRoute`), fetches the project's routing slug of the app's name through to the
  *  app's Worker, and the page runs on its host's sign-in: under paths ingress, every deployment's,
@@ -238,7 +238,7 @@ export function configTemplateFolders(repoRoot: string) {
 }
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
- *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). The preview's build offers
+ *  (`/projects?new=1&template=<name>`, packages/dash `projects/index.tsx`). The preview's build offers
  *  this PR's copy of every template (scripts/os/config-templates.ts, core/os/scripts/build.ts), so
  *  a template the PR changes is born as the PR has it. */
 export function templateQuickLaunches(input: {

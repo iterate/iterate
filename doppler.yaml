@@ -6,17 +6,17 @@ setup:
   - project: os
     path: core/os/
   - project: dash
-    path: apps/dash/
+    path: packages/dash/
   - project: agents
-    path: apps/agents/
+    path: packages/agents-app/
   - project: notes
-    path: apps/notes/
+    path: packages/notes/
   - project: _shared
-    path: apps/docs/
+    path: packages/docs-app/
   - project: admin
-    path: apps/admin/
+    path: packages/admin/
   - project: voice
-    path: apps/voice/
+    path: packages/voice-app/
   - project: dummy-petshop
     path: apps/dummy-petshop/
   - project: _shared

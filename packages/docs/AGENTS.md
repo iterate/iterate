@@ -1,6 +1,6 @@
 # Working on docs, for agents
 
-Docs (this package, and apps/docs) edits a project's files in the browser, several people at once.
+Docs (this package, and packages/docs-app) edits a project's files in the browser, several people at once.
 You work on the same docs with the same moves the page makes: read the file, commit a change, and
 append comment events. Each script below is an `async (itx) => …` for the platform's MCP `run`
 tool, or any code holding a project `itx`.

@@ -142,7 +142,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
 ```
 
 The shell's session reads, the organization tree, are made once by
-`<OrganizationTree>` (`apps/dash/src/components/organization-tree.tsx`) and
+`<OrganizationTree>` (`packages/dash/src/components/organization-tree.tsx`) and
 shared by every page through `useOrganizationTree()`: `organizations.list()`
 and `projects.list()`, read again whenever a fact lands on `api.user` or an
 `api.organizations.get(orgId)` it subscribes to, and after the page's own
@@ -269,7 +269,7 @@ low-level client, the UI kit's pure components, and types.
 ## One consumption model, the stream feed included
 
 The agents app's feed is `useIterateContext` over the agent's context
-(`apps/agents` `routes/_auth/projects.$slug.tsx`, `useAgentLog`): the whole log in
+(`packages/agents-app` `routes/_auth/projects.$slug.tsx`, `useAgentLog`): the whole log in
 memory (`history: "all"`), deduped by offset, reduced for the chat by `lib/agent-events.ts`.
 Don't build new UI on a second client-side store; use
 `useLiveState`/`useIterateContext` and a server-owned projection.

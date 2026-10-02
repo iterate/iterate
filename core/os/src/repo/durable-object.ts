@@ -362,7 +362,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       // refused before the trailers below, which would make a blank message look like one
       if (!input.message.trim())
         throw new Error("repo.commitFiles: message must be a non-empty string");
-      // a script's commit for someone is theirs (their email as name and address, as apps/docs
+      // a script's commit for someone is theirs (their email as name and address, as packages/docs-app
       // writes authors), and names the run that made it, and them when it names another author
       const onBehalfOf = await this.#onBehalfOfIn(cause);
       const email = onBehalfOf?.principal.email;

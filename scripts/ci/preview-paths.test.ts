@@ -13,7 +13,7 @@ test.for([
   { files: ["package.json"], preview: true },
   { files: [".depot/workflows/preview-os.yml"], preview: true },
   // the root manifest only: an app's own package.json is inside its app's pattern
-  { files: ["apps/spa/package.json"], preview: false },
+  { files: ["packages/spa/package.json"], preview: false },
   { files: ["docs/depot-ci.md", "lint/rules/no-describe.ts"], preview: false },
   { files: [".depot/workflows/lint-typecheck.yml", "scripts/ci/preview-paths.ts"], preview: false },
   { files: [], preview: false },

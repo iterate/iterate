@@ -1,4 +1,4 @@
-// base-path.ts — THE PATH A PROXIED APP IS SERVED UNDER in the browser (apps/notes, apps/docs). A
+// base-path.ts — THE PATH A PROXIED APP IS SERVED UNDER in the browser (packages/notes, packages/docs-app). A
 // project's config worker (the app's config-worker.ts) proxies it: on a host of its own under subdomains ingress
 // (`notes--<project>.<base>`) the base path is "", and under paths ingress it is
 // `/projects/<project>/<routingSlug>`. There the platform's edge strips that prefix from the URL the app sees and

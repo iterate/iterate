@@ -11,8 +11,8 @@ on:
     # the extension's one npm dependency, capnweb, ships with the next deploy rather than its own.
     paths:
       - .depot/workflows/deploy-spa.yml
-      - apps/spa/**
-      - apps/browser-extension/**
+      - packages/spa/**
+      - packages/browser-extension/**
       # the compatibility date its Worker runs on (iterate/compatibility-date)
       - core/lib/**
       - envs.ts
@@ -41,4 +41,4 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           SPA_ENV: ${{ inputs.env || 'prd' }}
-        run: pnpm --dir apps/spa run-script deploy --env "$SPA_ENV"
+        run: pnpm --dir packages/spa run-script deploy --env "$SPA_ENV"

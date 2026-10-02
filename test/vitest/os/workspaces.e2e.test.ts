@@ -225,7 +225,7 @@ localOnly(
 );
 
 localOnly(
-  "the Notes app's story, spelled as apps/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main",
+  "the Notes app's story, spelled as packages/notes spells it: create the repo and the workspace (idempotent), read the file through the workspace, write it and commit ONE commit on the repo's main",
   async ({ onTestFinished }) => {
     const itx = openItx(freshCtx("notes"));
     const artifacts = await FakeArtifacts.start();

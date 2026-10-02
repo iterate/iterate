@@ -11,11 +11,11 @@ shrink the fixture.
 
 ## 1. Read the URL
 
-| URL                                                                                | Deployment                                      |
-| ---------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `https://agents.iterate.com/projects/<slug>?agent=<path>`                          | prd (`agentsEnvs.prd` in `envs.ts`)             |
-| `https://pr<n>-agents.iterate-dev-preview.workers.dev/projects/pr<n>?agent=<path>` | that PR's preview (its PR body lists the URLs)  |
-| `http://localhost:<port>/projects/<slug>?agent=<path>`                             | `pnpm --dir apps/agents dev` against a local OS |
+| URL                                                                                | Deployment                                              |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `https://agents.iterate.com/projects/<slug>?agent=<path>`                          | prd (`agentsEnvs.prd` in `envs.ts`)                     |
+| `https://pr<n>-agents.iterate-dev-preview.workers.dev/projects/pr<n>?agent=<path>` | that PR's preview (its PR body lists the URLs)          |
+| `http://localhost:<port>/projects/<slug>?agent=<path>`                             | `pnpm --dir packages/agents-app dev` against a local OS |
 
 - `agent` is the context path, URL-encoded: `/agents/web/<moment>` for a chat started in
   the browser, `/agents/voice/<client>/<UTC>-<activation>` for a voice call. With no `agent`,
@@ -101,13 +101,13 @@ provider error the loop recovered from is usually not the complaint.
 Pick the narrowest layer that shows the complaint. Every layer here runs in node, with no
 deployment and no real model.
 
-| The complaint is about…                                               | Test next to                                                                                                     |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets                |
-| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                            |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `core/lib/src/agents/processor.test.ts`: `reduceProcessor` rows                                                  |
-| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent              |
-| an effect: a model call, a script run, the birth or death sagas       | `test/vitest/agents/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
+| The complaint is about…                                               | Test next to                                                                                                             |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| what the chat shows (missing, duplicated or wrong rows)               | `packages/agents-app/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets                |
+| the reducer behind the agent UI                                       | `packages/agents-app/src/lib/events/agent-ui-reducer.test.ts`                                                            |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `core/lib/src/agents/processor.test.ts`: `reduceProcessor` rows                                                          |
+| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent                      |
+| an effect: a model call, a script run, the birth or death sagas       | `test/vitest/agents/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `packages/agents-app/README.md`) |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
   (`<complaint>.repro.json`, with the test in `<complaint>.repro.test.ts`). At dump time,
@@ -123,7 +123,7 @@ deployment and no real model.
 
 ## 5. Prove it is red for the right reason
 
-`pnpm --dir <package> exec vitest run <file>` (`apps/agents`, `core/lib`, `packages/voice` or `packages/ui`). A failure only proves
+`pnpm --dir <package> exec vitest run <file>` (`packages/agents-app`, `core/lib`, `packages/voice` or `packages/ui`). A failure only proves
 something when its diff shows the prod symptom. To see everything, assert against a string,
 for example `expect(items.map((i) => i.kind)).toEqual("SHOW ME")`, read the diff, then delete
 that assertion. Commit the test and fixture, push, and open or update the PR as a draft so CI

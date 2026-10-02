@@ -23,6 +23,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
 import { connectIterate } from "iterate/node";
 import type { IngressRouting } from "iterate/project-ingress";
@@ -42,7 +43,7 @@ import {
   smoke,
 } from "../lib/deploy-helpers.ts";
 import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
-import { buildStartApp, type StartApp } from "../lib/start-app.ts";
+import { appDirectory, buildStartApp, type StartApp } from "../lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../ci/await-deploy.ts";
 import { depotApi, workflowsInProgress } from "../ci/depot.ts";
 import { createOctokit, getOctokit, getRepo } from "../ci/github.ts";
@@ -326,7 +327,7 @@ async function deployStartApp(
   /** a per-commit deployment's packages' commit (start-app.ts `startAppWorkerConfig`) */
   packagesCommit: string | undefined,
 ) {
-  const root = path.resolve(REPO_ROOT, "apps", app.name);
+  const root = fileURLToPath(app.root);
   await buildStartApp(app, envName, packagesCommit);
   await deployWithSecrets({
     cwd: root,
@@ -334,7 +335,11 @@ async function deployStartApp(
     secretValues: {},
     credentials,
   });
-  await smoke(`${url}/healthz`, (response) => response.status === 200, `apps/${app.name} health`);
+  await smoke(
+    `${url}/healthz`,
+    (response) => response.status === 200,
+    `${appDirectory(app)} health`,
+  );
   return { name: app.name, url };
 }
 
@@ -352,7 +357,7 @@ async function deployParents(ctx: EnvContext<OsDeployableEnv>) {
   const steps = [
     { name: "core/os", deploy: () => deployOs({ env: "preview" }) },
     ...APPS.map((app) => ({
-      name: `apps/${app.name}`,
+      name: appDirectory(app),
       deploy: () =>
         deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials, undefined),
     })),
@@ -444,7 +449,7 @@ async function deployPreviewSteps(
   const steps = [
     { step: "core/os", done: traceOperation("Deploy OS", () => deployOs({ env: name })) },
     ...apps.map((app) => ({
-      step: `apps/${app.name}`,
+      step: appDirectory(app),
       done: traceOperation(`Deploy ${app.name}`, () =>
         deployStartApp(app, name, urls.apps[app.name]!, credentials, packagesCommit),
       ),
@@ -1249,7 +1254,7 @@ async function main(command: Command, options: PreviewOptions) {
   }
   const apps = options.apps === "none" ? [] : APPS;
   if (dryRun) {
-    for (const app of apps) console.log(`  apps/${app.name} → ${urls.apps[app.name]}`);
+    for (const app of apps) console.log(`  ${appDirectory(app)} → ${urls.apps[app.name]}`);
     return;
   }
   // the name the suites and the cleanup job test and keep (preview-os.yml, main-os-e2e.yml)

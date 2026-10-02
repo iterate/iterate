@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-agents.yml
-      - apps/agents/**
+      - packages/agents-app/**
       - envs.ts
       - scripts/lib/**
       - core/configs/**
@@ -40,9 +40,9 @@ jobs:
         with:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      - name: Deploy apps/agents
+      - name: Deploy packages/agents-app
         id: deploy
-        working-directory: apps/agents
+        working-directory: packages/agents-app
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run-script deploy --env prd

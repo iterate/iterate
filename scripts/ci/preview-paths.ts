@@ -40,12 +40,12 @@ export const previewPaths = [
   "core/os/**",
   "core/configs/**",
   "configs/**",
-  "apps/dash/**",
-  "apps/agents/**",
-  "apps/notes/**",
-  "apps/docs/**",
-  "apps/admin/**",
-  "apps/voice/**",
+  "packages/dash/**",
+  "packages/agents-app/**",
+  "packages/notes/**",
+  "packages/docs-app/**",
+  "packages/admin/**",
+  "packages/voice-app/**",
   // the suites that drive the preview: vitest's and Playwright's (test/AGENTS.md)
   "test/**",
   // the SDK, and the CLI that test/vitest/os/iterate-cli.e2e.test.ts drives built

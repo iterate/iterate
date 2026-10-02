@@ -79,7 +79,7 @@ export default {
       // `cloudflare:workers` parses as the "cloudflare" package
       ignoreDependencies: ["cloudflare"],
     },
-    "apps/agents": {
+    "packages/agents-app": {
       entry: ["scripts/**/*.ts"],
       project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!"],
       vite: false,
@@ -110,8 +110,14 @@ export default {
     },
     // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
     ...Object.fromEntries(
-      ["admin", "dash", "docs", "notes", "voice"].map((app) => [
-        `apps/${app}`,
+      [
+        "packages/admin",
+        "packages/dash",
+        "packages/docs-app",
+        "packages/notes",
+        "packages/voice-app",
+      ].map((workspace) => [
+        workspace,
         {
           entry: ["scripts/**/*.ts"],
           project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!"],
@@ -130,13 +136,13 @@ export default {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },
-    "apps/spa": {
+    "packages/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       // The deploy (scripts/lib/deploy-app.ts) runs `pnpm exec wrangler` in the app's directory.
       entry: ["public/app.js"],
       ignoreDependencies: ["@iterate-com/capnweb", "wrangler"],
     },
-    "apps/browser-extension": {
+    "packages/browser-extension": {
       // public/index.html loads panel.js and the manifest names background.js; panel.js's
       // ./capnweb.js and ./oauth.js are the ones the build copies into dist/.
       entry: ["public/panel.js", "public/background.js"],

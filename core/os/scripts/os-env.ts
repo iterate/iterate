@@ -12,7 +12,7 @@ export const OsEnv = z.object({
   /** PostHog's project key: the worker's `APP_CONFIG posthogProjectKey`, which the issuer's own
    *  pages start posthog-js with. Unset ⇒ no PostHog. */
   posthogProjectKey: z.string().optional(),
-  /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
+  /** The dash's origin for this deployment (packages/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl: z.string().optional(),
   /** The platform admins (src/app-config.ts `admins`): exact email addresses, not secrets, so in

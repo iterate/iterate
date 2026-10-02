@@ -23,7 +23,7 @@ export const ITERATE_ROUTING_SLUG_HEADER = "x-iterate-routing-slug";
 
 /** THE BASE PATH a project host is served under (`ProjectAddress.basePath`, under paths
  *  `/projects/<project>[/<routingSlug>]`): the edge strips it from the URL the config worker sees
- *  and says it here, so a site composes the paths the browser addresses (apps/notes base-path.ts).
+ *  and says it here, so a site composes the paths the browser addresses (packages/notes base-path.ts).
  *  Set or deleted by the edge on every project request, so a visitor's spelling never reaches the
  *  project. Absent under subdomains, where each routing slug owns its origin. */
 export const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";

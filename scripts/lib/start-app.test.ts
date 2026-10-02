@@ -7,7 +7,7 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
   const config = startAppWorkerConfig(
     {
       name: "notes",
-      root: new URL("file:///apps/notes/"),
+      root: new URL("file:///packages/notes/"),
       dopplerProject: "notes",
       envs: notesEnvs,
     },
@@ -37,7 +37,7 @@ test("a per-commit deployment's app refuses to build without the commit its pack
     startAppWorkerConfig(
       {
         name: "docs",
-        root: new URL("file:///apps/docs/"),
+        root: new URL("file:///packages/docs-app/"),
         dopplerProject: "_shared",
         envs: docsEnvs,
       },
@@ -67,7 +67,12 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
 
 test("a deployed app links to the other apps at their prd origins from envs.ts, as it signs in against prd's issuer", () => {
   const { vars } = startAppWorkerConfig(
-    { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
+    {
+      name: "dash",
+      root: new URL("file:///packages/dash/"),
+      dopplerProject: "dash",
+      envs: dashEnvs,
+    },
     "prd",
     undefined,
   );
@@ -86,7 +91,12 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
 
 test("main on dev (the app's `preview` build) signs in against main on dev's core/os and links to its other apps", () => {
   const { vars } = startAppWorkerConfig(
-    { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
+    {
+      name: "dash",
+      root: new URL("file:///packages/dash/"),
+      dopplerProject: "dash",
+      envs: dashEnvs,
+    },
     "preview",
     undefined,
   );
@@ -106,7 +116,7 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   const { vars } = startAppWorkerConfig(
     {
       name: "voice",
-      root: new URL("file:///apps/voice/"),
+      root: new URL("file:///packages/voice-app/"),
       dopplerProject: "voice",
       envs: voiceEnvs,
     },
@@ -120,7 +130,12 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   });
   // local dev starts from prd's config (no env) and overrides one key, keeping the rest
   const local = startAppWorkerConfig(
-    { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
+    {
+      name: "dash",
+      root: new URL("file:///packages/dash/"),
+      dopplerProject: "dash",
+      envs: dashEnvs,
+    },
     undefined,
     undefined,
   ).vars;
@@ -145,7 +160,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
   const dash = startAppWorkerConfig(
     {
       name: "dash",
-      root: new URL("../../apps/dash/", import.meta.url),
+      root: new URL("../../packages/dash/", import.meta.url),
       dopplerProject: "dash",
       envs: dashEnvs,
     },

@@ -2,20 +2,20 @@
 
 `envs.ts` owns every non-secret value: worker names, URLs, accounts and the PostHog key. An app
 on the platform has no secrets of its own, so it deploys from `_shared`, whose `preview` and `prd`
-configs hand the deploy the Cloudflare credentials and the CI Slack token (as `apps/docs` does):
+configs hand the deploy the Cloudflare credentials and the CI Slack token (as `packages/docs-app` does):
 
 - In `scripts/app.ts`, set `StartApp.dopplerProject` to `"_shared"`. `deployApp` reads it
   (`scripts/lib/start-app.ts`).
-- Add `project: _shared` with `path: apps/<app>/` to `doppler.yaml`.
+- Add `project: _shared` with `path: packages/<app>/` to `doppler.yaml`.
 
 An app that gets a secret of its own gets a Doppler project of its own:
 
 - Create project `<app>` and set `dopplerProject: "<app>"`.
 - Create config `prd` inheriting `_shared/prd`. The prd deploy and its Slack notice need nothing
   more. Add `preview` (its own `preview` environment) inheriting `_shared/preview` for a hand
-  deploy of main on dev's `<app>` (`pnpm --dir apps/<app> run deploy --env preview`). Per-commit
+  deploy of main on dev's `<app>` (`pnpm --dir packages/<app> run deploy --env preview`). Per-commit
   PR deployments run under `os/preview` and never read the app's project.
-- Map `apps/<app>/` to `project: <app>` in `doppler.yaml`, without pinning a config.
+- Map `packages/<app>/` to `project: <app>` in `doppler.yaml`, without pinning a config.
 - Confirm by name only, never by value:
   `doppler secrets --project <app> --config prd --only-names` should list
   `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.

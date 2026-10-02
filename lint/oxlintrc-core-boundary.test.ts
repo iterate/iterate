@@ -17,7 +17,7 @@ test("nothing in core/ imports outside core/ but npm packages", () => {
       path: "core/os/src/shared.ts",
       source: 'import { x } from "../../../packages/shared/src/x.ts";',
     },
-    { path: "core/os/src/dash.ts", source: 'export { x } from "../../../apps/dash/src/x.ts";' },
+    { path: "core/os/src/dash.ts", source: 'export { x } from "../../../packages/dash/src/x.ts";' },
     { path: "core/os/src/dynamic.ts", source: 'await import("../../../test/helpers/x.ts");' },
     {
       path: "core/lib/src/cli/config.ts",
@@ -59,7 +59,7 @@ test("nothing in core/ imports outside core/ but npm packages", () => {
     "scripts/lib/x.ts",
     "envs.ts",
     "packages/shared/src/x.ts",
-    "apps/dash/src/x.ts",
+    "packages/dash/src/x.ts",
     "test/helpers/x.ts",
     "configs/voice/voice.ts",
     "core/lib/src/lib.ts",

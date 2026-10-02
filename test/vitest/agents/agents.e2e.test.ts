@@ -23,7 +23,10 @@ import {
   untilValue,
 } from "../../helpers/client.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
-import { reduceAgentFeed, toAgentEvent } from "../../../apps/agents/src/lib/agent-events.ts";
+import {
+  reduceAgentFeed,
+  toAgentEvent,
+} from "../../../packages/agents-app/src/lib/agent-events.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
