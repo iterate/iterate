@@ -83,13 +83,19 @@ go back to listing iterate/iterate's releases.
 1. Merge the iterate/iterate PR that removes `apps/kit` (deletes `deploy-kit.yml` and
    `kit-firmware.yml`). k.iterate.com keeps serving its last deploy, still listing iterate/iterate's
    releases, which the archive keeps serving.
-2. Deploy prd from iterate/kit#1's head (`pnpm deploy --env prd`). Kit then lists iterate/kit's
+2. Check no Deploy Kit run is still queued or running here (its concurrency group queues runs
+   instead of cancelling them, and a late one would overwrite step 3). Then deploy prd from
+   iterate/kit#1's head (`pnpm run deploy --env prd`). Kit then lists iterate/kit's
    releases, the copied `003103-…` ones, so there is no gap. Deploying before the merge matters:
    on the merge's push, Deploy and Kit Firmware both take about 3 minutes, and the firmware's last
    step (k.iterate.com serves the new files) would race prd's deploy and page.
 3. Merge iterate/kit's PR. Its main push deploys again and builds and publishes `003104-…` for
    every board (the PR changes files in every board's inputs).
 4. Check k.iterate.com lists `003104-…`.
+5. Delete the per-commit preview Workers named `…-<sha7>-kit` on the dev account (two on
+   2026-10-02: `main-bbd8934-kit`, `pr3478-bc264e9-kit`, plus any preview deployed before this
+   merges). Once Kit is out of `PREVIEW_DEPLOYMENT_APPS`, the sweep and cleanups no longer count
+   them as members of their deployments, so nothing else deletes them.
 
 ## Plan
 
@@ -120,6 +126,14 @@ go back to listing iterate/iterate's releases.
 - Lint run in this `.claude` worktree reads no files; it was run from a worktree outside it.
 - For mobile (Misha asked): iterate/kit's deploys are the pattern worth copying to iterate/mobile,
   whose website deploys by hand: `envs.ts` as data, `vite.config.ts` building the Worker config,
-  `pnpm deploy --env`, a Deploy workflow with preview before prd, and a page on red. Its EAS
+  `pnpm run deploy --env`, a Deploy workflow with preview before prd, and a page on red. Its EAS
   builds could publish like Kit's releases (GitHub releases planned by input diffs), if it ever
   needs downloads without signing in.
+- A review of both PRs (a subagent, 2026-10-02) found: `pnpm deploy` is pnpm's own command (fixed:
+  `pnpm run deploy`); iterate/kit's main was unprotected (added "Required CI" for its two CI
+  checks, "Main's history" against force pushes and deletion, and iterate's merge settings: squash
+  with the PR's title and body); Kit's voice pin is invisible from `packages/voice` (a comment in
+  `install.ts`); orphaned `-kit` preview Workers after the merge (cutover step 5); iterate's zod
+  patch was missing (copied). Left as is: `scripts/ci/page.ts` pages once per red run, so a board
+  that stays broken pages daily from the scheduled run, where iterate's notify.ts keeps one page
+  per red streak.
