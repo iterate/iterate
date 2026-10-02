@@ -14,3 +14,6 @@ build offers (`configs/`).
   repository's `configs/`) come from its deploy tooling (`scripts/os/config-templates.ts`).
 - **Internal tooling stays outside:** iterate's deploys and previews (`scripts/os/`), the end-to-end
   and browser tests (`test/`), tasks and CI.
+- **No ids or keys**, here or in `packages/`, tests included: no UUID, account id, key, or long hex,
+  base64 or digit string (`lint/public-copies.test.ts`). An id goes in `envs.ts`, a secret in
+  Doppler; a test uses an obvious fake (`aaaaabbbbbccccc111112222233333aaaaabbbbb`).

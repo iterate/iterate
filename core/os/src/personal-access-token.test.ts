@@ -7,7 +7,7 @@ import {
   parsePersonalAccessToken,
 } from "./personal-access-token.ts";
 
-const userId = `user_${"0123456789abcdef".repeat(2)}`;
+const userId = "user_aaaaabbbbbccccc111112222233333aa";
 
 test("a new key: the scannable format, its id and user readable back, its SHA-256 the only thing kept", async () => {
   const { id, token, hash } = await newPersonalAccessToken(userId);
@@ -20,6 +20,7 @@ test("a new key: the scannable format, its id and user readable back, its SHA-25
   // the checksum is zlib's CRC32 of everything before it, in six base62 digits
   const checksum = [...token.slice(-6)].reduce(
     (value, digit) =>
+      // allow-high-entropy-next-line: the base62 alphabet, spelled out apart from the module's
       value * 62 + "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".indexOf(digit),
     0,
   );

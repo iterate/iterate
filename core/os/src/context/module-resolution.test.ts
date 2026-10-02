@@ -291,7 +291,7 @@ test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules"
   expectLinked(modules);
 });
 
-const sdkCommit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+const sdkCommit = "aaaaabbbbbccccc111112222233333aaaaabbbbb";
 
 test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath imports at that commit, and pkg.pr.new is never asked; a URL naming no package is refused", async () => {
   const esm = fakeEsm({
@@ -319,7 +319,7 @@ test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath 
   await expect(
     resolve(sdkSource(`https://pkg.pr.new/acme/shop@${sdkCommit}`), esm),
   ).rejects.toThrow(
-    /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop@9f8e7d6c5b4a\w+; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
+    /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop@aaaaabbbbbccccc111112222233333aaaaabbbbb; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
   );
 });
 

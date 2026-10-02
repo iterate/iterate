@@ -33,6 +33,12 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
+/** The Chrome extension's public key, which the zip the SPA serves carries as its manifest's `key`
+ *  (packages/browser-extension/scripts/build.ts): it fixes the extension's id, and so its sign-in
+ *  redirect `https://<id>.chromiumapp.org/`, on every install. Public: it ships in every copy. */
+const CHROME_EXTENSION_KEY =
+  "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAspgSUwSfiXguZe3WByjp613X57nr6/xazInTLwa7flo9sR1XREgiLCG1ZcrWR8LoottD2Hbs9ESpRLbIapj6rDAZwc/o3Q9HNVqNaS1AyInNG3WFHs8EFM/zS5UWZ5FxV5hHwQv5/soV24FDkcfvjJ81GwwizSsBxG0YTap+2WRQZkyipnQLQLgpf7Ei+MfIhUchxb4TBjgs9dKCD6ObRkHunEg3NUENGoVoKAs3+CctotvenoxgTsjLByC3tJBRwF7NLorAockPz7l6THWwi1F7J25LpvUpB0TdYrU8U2ygNUefU7+dWgkN13av5iAll2/sFNPJEsnwGpfVNagJZwIDAQAB";
+
 /** KIT, the voice boards' firmware and their browser installer, deployed from its own repository,
  *  iterate/kit (its envs.ts), never from here. Its Workers are listed so this repository's tooling
  *  knows them: their origins are our own zones (scripts/lib/start-app.ts `ownZones`), the prd fault
@@ -356,12 +362,14 @@ export const spaEnvs = {
     dopplerConfig: "preview",
     workerName: "iterate-spa-preview",
     baseUrl: "https://iterate-spa-preview.iterate-dev-preview.workers.dev",
+    chromeExtensionKey: CHROME_EXTENSION_KEY,
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",
     workerName: "iterate-spa",
     baseUrl: "https://iterate-spa.iterate.workers.dev",
+    chromeExtensionKey: CHROME_EXTENSION_KEY,
   },
 };
 

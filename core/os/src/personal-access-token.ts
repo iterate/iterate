@@ -28,6 +28,7 @@
 import { sha256Hex } from "./caller.ts";
 
 const PREFIX = "itk_";
+// allow-high-entropy-next-line: the base62 alphabet
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const SHAPE = /^itk_([0-9a-f]{32})_([0-9a-f]{16})_[0-9A-Za-z]{43}([0-9A-Za-z]{6})$/;
 

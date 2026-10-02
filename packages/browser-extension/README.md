@@ -48,8 +48,10 @@ context of the project (an agent's script runs in its own) the spelling is
 Download the current ZIP from [the SPA's downloads page](https://iterate-spa.iterate.workers.dev/downloads/)
 and unzip it, or build `dist/` from this folder. The SPA deployment publishes a new bundle whenever
 the SPA or this folder changes on main; a capnweb bump alone does not redeploy it. Bump
-`public/manifest.json`'s version when shipping an update; keep its `key` unchanged so existing
-installs retain their extension ID and OAuth redirect URI. The panel heading shows the version.
+`public/manifest.json`'s version when shipping an update. Its `key` is a placeholder:
+`scripts/build.ts` puts iterate's key (from iterate's private config) in the SPA's zip, so existing
+installs retain their extension ID and OAuth redirect URI, and leaves it out of a `dist/` you build,
+so Chrome derives the ID from its folder. The panel heading shows the version.
 
 Chrome 114 or newer. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, select
 the unzipped folder or `packages/browser-extension/dist`. Pin it from the toolbar's extensions menu and

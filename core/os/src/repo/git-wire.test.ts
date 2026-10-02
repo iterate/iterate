@@ -32,7 +32,7 @@ import {
 } from "./git-wire.ts";
 
 /** A tip the fake remote's ls-refs names. */
-const TIP = "322f6b7736f1636a850cfc3d3d639730b0882514";
+const TIP = "aaaaabbbbbccccc111112222233333aaaaabbbbb";
 
 // ── git wire ── the wire's one refusal that matters to the repo facet: a TRUNCATED pkt-line body is
 // an outage, never an empty ref list (an empty list reads as "unborn repo" → "no file", which would
@@ -196,22 +196,17 @@ test("a push that gets no answer in 20 s fails, and is never sent twice", async 
 // `git` over the same three files (a.txt "hello\n", dir/b.txt "world\n", dir/sub/c.txt "deep\n";
 // author iterate <config@iterate.com>, 1700000000 +0000, message "first"), so `commitFiles`'s
 // nested-directory encoding — entry order, the directory mode, the commit header — is pinned to git.
-
-const manifest: RepoManifest = new Map([
-  ["a.txt", { oid: "ce013625030ba8dba906f756967f9e9ca394464a", mode: "100644" }],
-  ["dir/b.txt", { oid: "cc628ccd10742baea8241c5924df992b5c019f71", mode: "100644" }],
-  ["dir/sub/c.txt", { oid: "4cdb2265d30204be5463b38174b2e8e717982405", mode: "100644" }],
-]);
-const ROOT_TREE = "56418d827d2ac1d9c1b21c7161407dfde86f9e9b";
+// Each id is checked by its first 7 hex digits, as git abbreviates one.
 
 test("the tree codec against git's ids: treeObjectsOf encodes nested directories to git's tree ids; manifestOf flattens them back", async () => {
+  const manifest = await threeFiles();
   const { rootOid, trees } = await treeObjectsOf(manifest);
-  expect(rootOid).toBe(ROOT_TREE);
-  expect(trees.map((tree) => tree.oid).sort()).toEqual(
+  expect(rootOid.slice(0, 7)).toBe("56418d8");
+  expect(trees.map((tree) => tree.oid.slice(0, 7)).sort()).toEqual(
     [
-      ROOT_TREE,
-      "62f4835d0012f43ee010ec7ad340e9a99958ce0d", // dir
-      "7b0c5d2afa30e0b524990e5c6f6a5bc4dd63a09a", // dir/sub
+      "56418d8", // the root
+      "62f4835", // dir
+      "7b0c5d2", // dir/sub
     ].sort(),
   );
   const objects = new Map(
@@ -220,23 +215,23 @@ test("the tree codec against git's ids: treeObjectsOf encodes nested directories
       { oid: tree.oid, type: "tree" as const, payload: tree.payload },
     ]),
   );
-  expect(manifestOf(parseTree(objects.get(ROOT_TREE)!.payload), objects)).toEqual(manifest);
+  expect(manifestOf(parseTree(objects.get(rootOid)!.payload), objects)).toEqual(manifest);
 });
 
 test("the tree codec against git's ids: hashObject is git's blob id; encodeCommit hashes to git's commit id and parseCommit reads it back", async () => {
-  expect(await hashObject("blob", new TextEncoder().encode("hello\n"))).toBe(
-    "ce013625030ba8dba906f756967f9e9ca394464a",
-  );
+  const blob = await hashObject("blob", new TextEncoder().encode("hello\n"));
+  expect(blob.slice(0, 7)).toBe("ce01362");
+  const { rootOid } = await treeObjectsOf(await threeFiles());
   const commit = encodeCommit({
     author: { name: "iterate", email: "config@iterate.com", date: new Date(1_700_000_000_000) },
     committer: { name: "iterate", email: "config@iterate.com" },
     message: "first\n", // git's own commits end their message with a newline
     parents: [],
-    tree: ROOT_TREE,
+    tree: rootOid,
   });
-  expect(await hashObject("commit", commit)).toBe("322f6b7736f1636a850cfc3d3d639730b0882514");
+  expect((await hashObject("commit", commit)).slice(0, 7)).toBe("322f6b7");
   expect(parseCommit(commit)).toEqual({
-    tree: ROOT_TREE,
+    tree: rootOid,
     parents: [],
     author: { name: "iterate", email: "config@iterate.com" },
     committer: { name: "iterate", email: "config@iterate.com" },
@@ -313,7 +308,7 @@ test("commitReaches: along every parent within the objects, and onto a parent th
       committer: { name: "a", email: "a@example.com" },
       message,
       parents,
-      tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      tree: "aaaaabbbbbccccc111112222233333aaaaabbbbb",
     });
     const oid = await hashObject("commit", payload);
     objects.set(oid, { oid, type: "commit", payload });
@@ -369,6 +364,16 @@ test("redactRemote drops a credential whatever the scheme or its case", () => {
   expect(redactRemote("https://github.com/a/b.git")).toBe("https://github.com/a/b.git");
   expect(redactRemote("https://x:p@ss@github.com/a/b.git")).toBe("https://github.com/a/b.git");
 });
+
+/** The tree codec's three files, each at the blob id git gives its contents. */
+async function threeFiles(): Promise<RepoManifest> {
+  const blob = (text: string) => hashObject("blob", new TextEncoder().encode(text));
+  return new Map([
+    ["a.txt", { oid: await blob("hello\n"), mode: "100644" }],
+    ["dir/b.txt", { oid: await blob("world\n"), mode: "100644" }],
+    ["dir/sub/c.txt", { oid: await blob("deep\n"), mode: "100644" }],
+  ]);
+}
 
 /** `user:password` as a Basic header value, UTF-8 first. */
 function basic(credential: string): string {

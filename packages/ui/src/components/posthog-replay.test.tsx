@@ -17,7 +17,7 @@ import { Input } from "#/components/ui/input.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 
 test("a replay masks what is typed and leaves out a NotRecorded block, and no event carries an invitation token", async () => {
-  const token = "phc_FAKE_replay_privacy_test";
+  const token = "phc_aaaaabbbbbccccc111112222233333aaaaabbbbbccc";
   // an invitation link's page: its URL holds the token
   history.replaceState(null, "", "/invitations/FAKE-invite-token");
   // posthog-js's preloaded remote config (what `/e/array/<token>/config.js` sets): record replays and autocapture

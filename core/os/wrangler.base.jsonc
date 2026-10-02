@@ -116,8 +116,8 @@
   // plane's D1, src/oauth-store.ts), the sign-in challenges and the personal access tokens' index.
   "kv_namespaces": [
     // itx.kv backing — project-prefixed (the D8 portability proof point).
-    { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
-    { "binding": "OAUTH_KV", "id": "b8efbdc3253840fa95331a80efbeb03d" },
+    { "binding": "ITX_KV" },
+    { "binding": "OAUTH_KV" },
   ],
 
   // CONFIGURATION lives in src/app-config.ts, not here: the `APP_CONFIG` Worker secret plus

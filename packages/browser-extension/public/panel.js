@@ -19,8 +19,8 @@ const chromeStore = {
 
 const oauth = oauthClient({
   sessions: chromeStore,
-  // `https://<extension id>.chromiumapp.org/`: the manifest's `key` keeps the id, and so this URL,
-  // the same on every install.
+  // `https://<extension id>.chromiumapp.org/`: the published zip's manifest `key` keeps the id, and so
+  // this URL, the same on every install (scripts/build.ts replaces manifest.json's placeholder).
   redirectUri: chrome.identity.getRedirectURL(),
   // the issuer's own login and consent pages, which share the profile's cookies
   launch: async (url) => {

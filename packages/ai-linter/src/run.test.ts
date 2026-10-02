@@ -158,7 +158,7 @@ test("GitHub lists a changed file without its name: the others are linted, and t
     alsoListed: Array.from({ length: 142 }, (_, index) =>
       index === 100
         ? {
-            sha: "c88986395d0cf995a15705159d1ed16459a6ef00",
+            sha: "aaaaabbbbbccccc111112222233333aaaaabbbbb",
             additions: 21,
             deletions: 17,
             changes: 38,
@@ -180,7 +180,7 @@ test("GitHub lists a changed file without its name: the others are linted, and t
 test("a file GitHub lists without its name counts toward the 1,000 files read", async () => {
   const github = fakeGithub({
     alsoListed: [
-      { sha: "c88986395d0cf995a15705159d1ed16459a6ef00" },
+      { sha: "aaaaabbbbbccccc111112222233333aaaaabbbbb" },
       ...Array.from({ length: 998 }, (_, index) => ({
         filename: `data/${index}.json`,
         status: "modified",
