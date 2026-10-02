@@ -124,3 +124,7 @@ Not caught by any entropy check, and not secret: personal emails in
   `"acme-account-id"` and `"phc_FAKE"` became grouped fakes. A key shape like `phc_…` is now
   excused by the same runs test (no entropy floor); random `phc_`, `sk-ant-`, `ghp_` and `AKIA` keys
   and a PEM header are still flagged.
+- `public/manifest.json` keeps a placeholder `key` (Misha's review), so a reader sees where the key
+  comes from. Chrome refuses an invalid key, so `scripts/build.ts` always swaps it: iterate's key
+  when `CHROME_EXTENSION_KEY` is set, none otherwise. Built both ways: the env build's manifest
+  equals main's.
