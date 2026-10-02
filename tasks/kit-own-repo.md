@@ -14,7 +14,13 @@ firmware as separate repos. iterate/mobile made the same split on 9/30.
 
 ## Status
 
-- Spec only so far.
+- Nearly done: both halves are open as draft PRs, green where CI has finished, waiting on review
+  and the cutover. iterate/kit#1 makes Kit build, release and deploy on its own; this PR
+  (iterate/iterate#3511) removes it here.
+- Done outside the PRs: iterate/kit exists (public, with apps/kit's history and the tag
+  ruleset), every board's newest release is copied there, and a preview deploy from the branch
+  serves them.
+- Left: review, then the cutover below, then telling the Archive Handover session that kit is gone.
 
 ## What ties Kit to iterate/iterate
 
@@ -39,11 +45,12 @@ firmware as separate repos. iterate/mobile made the same split on 9/30.
   reach the archive. Firmware `git log`/`blame` keeps working. The import lands on iterate/kit's
   main as-is (it does not build there yet); the PR that makes it build stacks on top.
 - **Repo root = old `apps/kit`.** `firmware/`, `src/`, `scripts/`, `public/` at the top.
-- **Firmware versions restart their count.** A version is `<first-parent commit count>-<date>-<sha7>`
-  on the repo's main. iterate/kit's main has about 100 commits, so its first release is
-  `0001xx-…`, below iterate/iterate's `003xxx-…`. Nothing compares versions across repos: Kit lists
-  only its own repo's tags, and a board updates only when someone calls `system.update` with a URL.
-  The date still says which is newer.
+- ~~**Firmware versions restart their count.**~~ _Changed while building it: versions count on from
+  iterate/iterate's (`COMMITS_BEFORE_THE_MOVE = 3103 - 99` in firmware-release.ts), and each
+  board's newest release, `003103-2026-10-02-bbd8934`, is copied to iterate/kit at 5a0e46f (the
+  filtered bbd8934, which built them). Without the copies, k.iterate.com would list no firmware
+  from its first deploy from iterate/kit until the first builds there published (10–15 minutes);
+  with a restarted count, the copies would sort above every new release forever._
 - **Depot CI, as iterate/iterate.** The depot-code-access app is installed on every repo in the
   org, and the org's one Depot secret, `DOPPLER_TOKEN`, comes with it. No new credentials. The tag
   ruleset is recreated on iterate/kit with the same bypass.
@@ -52,9 +59,11 @@ firmware as separate repos. iterate/mobile made the same split on 9/30.
   iterate/packages (`iterate-logo`, `log-in-with-iterate`, `posthog`) and shadcn's own (`button`,
   `field`, …). The few files Kit used from `packages/ui/src/apps` and `packages/shared` are copied
   into `src/app/`, each saying where it came from.
-- **Kit's own `envs.ts`** holds `preview` and `prd` (the same workers, Doppler project `kit`), and
-  the Worker config that `scripts/lib/start-app.ts` used to build. Its `denyZones` is a copy of
-  iterate/iterate's `ownZones()` at the move.
+- **Kit's own `envs.ts`** holds `preview` and `prd` (the same workers, Doppler project `kit`) as
+  plain data, and `vite.config.ts` builds the Worker config that `scripts/lib/start-app.ts` used to.
+  Its `denyZones` is a copy of iterate/iterate's `ownZones()` at the move. _`preview` deploys with
+  Doppler `kit/dev`: kit has no `preview` config, and iterate deployed it with `os/preview`'s
+  token._
 - **Deploys:** main pushes deploy `preview` (kit.iterate-dev-preview.workers.dev, signs in against
   os.iterate-dev-preview) and then `prd` (k.iterate.com). Same Worker names, so nothing is created
   or deleted. Per-PR Kit previews are left for later; iterate/iterate's PR previews lose their kit.
@@ -62,6 +71,8 @@ firmware as separate repos. iterate/mobile made the same split on 9/30.
   Slack bot token in Doppler `kit/prd`. Smaller than iterate's dashboard rows; the same channel.
 - **iterate/iterate keeps** `k.iterate.com` in the prd project wildcard's `excludedHostnames`, and
   `kiterate` in the prd fault alarm's workers: it's still a first-party Worker on the prd account.
+  _Done as `kitWorkers` in envs.ts, which also keeps `kit.iterate-dev-preview.workers.dev` in
+  `ownZones` and stops the preview sweep listing the dev `kit` Worker as unknown._
   Comments in `packages/voice` and `core/os` that point into `apps/kit/firmware` link to iterate/kit.
 
 ## Cutover order
@@ -72,23 +83,41 @@ go back to listing iterate/iterate's releases.
 1. Merge the iterate/iterate PR that removes `apps/kit` (deletes `deploy-kit.yml` and
    `kit-firmware.yml`). k.iterate.com keeps serving its last deploy, still listing iterate/iterate's
    releases, which the archive keeps serving.
-2. Merge iterate/kit's PR. Its main push builds and publishes every board's first release on
-   iterate/kit and deploys Kit, which then lists iterate/kit's releases.
-3. Check k.iterate.com lists the new versions and serves their files (the firmware workflow's last
-   step does this).
+2. Merge iterate/kit's PR. Its main push deploys Kit, which then lists iterate/kit's releases:
+   the copied `003103-…` ones at first, so there is no gap. Then it builds and publishes
+   `003104-…` for every board (the PR changes files in every board's inputs).
+3. Check k.iterate.com lists `003104-…` and serves their files (the firmware workflow's last step
+   checks the files).
 
 ## Plan
 
-- [ ] iterate/kit: create (public), push the filtered history to main
-- [ ] iterate/kit: tag ruleset like iterate/iterate's
-- [ ] iterate/kit PR: standalone package (pkg.pr.new, shadcn, `src/app/`, `envs.ts`, deploy script)
-- [ ] iterate/kit PR: CI (typecheck, lint, format, vitest, firmware host tests), firmware releases,
-      deploy, paging
-- [ ] iterate/kit PR: README/AGENTS.md for the new layout; `apps/kit/...` paths in comments fixed
-- [ ] Evidence: the PR's CI green, firmware legs build every board, a preview Worker deployed from
-      the branch signs in and lists firmware
-- [ ] iterate/iterate PR: remove `apps/kit` and its plumbing (workflows, preview set, envs, knip,
+- [x] iterate/kit: create (public), push the filtered history to main _(99 commits, 5a0e46f)_
+- [x] iterate/kit: tag ruleset like iterate/iterate's _(ruleset 24352548)_
+- [x] Copy each board's newest release to iterate/kit _(7 releases, sha256 of every asset checked)_
+- [x] iterate/kit PR: standalone package (pkg.pr.new, shadcn, `src/app/`, `envs.ts`, deploy script)
+      _(iterate/kit#1)_
+- [x] iterate/kit PR: CI (typecheck, lint, format, vitest, firmware host tests), firmware releases,
+      deploy, paging _(`.depot/workflows/{ci,kit-firmware,deploy}.yml`, `scripts/ci/page.ts`)_
+- [x] iterate/kit PR: README/AGENTS.md for the new layout; `apps/kit/...` paths in comments fixed
+- [x] Evidence: the PR's CI green, firmware legs build every board, a preview Worker deployed from
+      the branch serves the releases _(sign-in reaches the dev platform; I didn't sign in)_
+- [x] iterate/iterate PR: remove `apps/kit` and its plumbing (workflows, preview set, envs, knip,
       doppler.yaml, docs, tests)
-- [ ] Tell the Archive Handover session (draft root-commit message lists `apps/kit`) and the
-      apps-into-packages session
-- [ ] Note in `tasks/run-this-script.md` that Kit's Prepare card is now an iterate/kit change
+- [ ] Cutover (Misha merges, in order): this PR, then iterate/kit#1
+- [ ] Tell the Archive Handover session once kit is gone _(told it the PRs are open)_
+- [x] Tell the apps-into-packages session
+- [x] Note in `tasks/run-this-script.md` that Kit's Prepare card is now an iterate/kit change
+
+## Implementation notes
+
+- Depot CI ran iterate/kit's workflows with no setup: depot-code-access is on every org repo, and
+  the org's `DOPPLER_TOKEN` reaches them. ESP-IDF's first install there came from the network (the
+  key is the pin file's hash, and the moved file's header changed); main's first run caches it.
+- iterate's `toolchain.test.ts` fails on macOS (bash 3.2 has no `inherit_errexit`); the script only
+  runs in CI. iterate/kit's copy skips there.
+- Lint run in this `.claude` worktree reads no files; it was run from a worktree outside it.
+- For mobile (Misha asked): iterate/kit's deploys are the pattern worth copying to iterate/mobile,
+  whose website deploys by hand: `envs.ts` as data, `vite.config.ts` building the Worker config,
+  `pnpm deploy --env`, a Deploy workflow with preview before prd, and a page on red. Its EAS
+  builds could publish like Kit's releases (GitHub releases planned by input diffs), if it ever
+  needs downloads without signing in.
