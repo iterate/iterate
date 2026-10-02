@@ -133,8 +133,8 @@ function highEntropyStrings(line: string) {
       found.push(match);
     }
   };
-  // a key's or a token's own shape, whatever its entropy
-  for (const pattern of KEY_SHAPES) check(pattern, line, () => true);
+  // a key's or a token's own shape, unless typed (`phc_aaaaabbbbbccccc…`): no entropy floor
+  for (const pattern of KEY_SHAPES) check(pattern, line, (key) => looksRandom(key, 0));
   check(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, line, (uuid) => {
     return looksRandom(uuid.replaceAll("-", ""), 2.5);
   });

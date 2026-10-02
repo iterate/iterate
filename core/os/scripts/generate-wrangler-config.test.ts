@@ -48,7 +48,7 @@ test("a named build without its deployment fails, rather than looking the name u
 /** A deployment as its caller hands one over: someone's own, on their own account. */
 const acme: OsDeployableEnv = {
   name: "acme",
-  cloudflareAccountId: "acme-account-id",
+  cloudflareAccountId: "aaaaabbbbbccccc111112222233333aa",
   dopplerConfig: "acme",
   workerName: "acme-os",
   baseUrl: "https://os.acme.test",

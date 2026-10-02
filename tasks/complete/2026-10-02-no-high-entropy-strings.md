@@ -65,9 +65,10 @@ folders we hard-code non-secret ids like the Cloudflare account id on purpose.
 - [x] `core/os/src/repo/git-wire.test.ts`: input blob ids from `hashObject`, expected ids by their
       first 7 hex digits, a run of one letter where the value doesn't matter _`threeFiles()` at
       the bottom; `TIP` is 40 `d`s_
-- [x] made-up ids in tests: obvious fakes or short strings _the session cookie must be UUID-shaped
-      (`appSession`), so it's `00000000-0000-4000-8000-000000000001`; pkg.pr.new commits
-      40 `a`s; `"acme-account-id"`, `"blob-sha"`, `"phc_FAKE"`_
+- [x] made-up ids in tests: obvious fakes the shape of the real thing _the session cookie must
+      be UUID-shaped (`appSession`), so it's `00000000-0000-4000-8000-000000000001`; shas, account
+      ids and the PostHog key are groups of 5 (`aaaaabbbbbccccc111112222233333…`) at the real
+      length_
 - [x] `core/lib/README.md`: drop the blob link to the deleted decision record, keep
       `iterate/iterate#3018` _names the doc's path in that PR_
 - [x] base62 alphabet (`core/os/src/personal-access-token.ts`, its test): markers
@@ -119,3 +120,7 @@ Not caught by any entropy check, and not secret: personal emails in
   string now also has to change character at more than half its positions to count as random.
   Real ids are missed no more often than before (same 200k-sample rates); `0123456789abcdef…` is
   still flagged.
+- A fake keeps the real value's shape and length (Misha, 2026-10-02), so `"blob-sha"`,
+  `"acme-account-id"` and `"phc_FAKE"` became grouped fakes. A key shape like `phc_…` is now
+  excused by the same runs test (no entropy floor); random `phc_`, `sk-ant-`, `ghp_` and `AKIA` keys
+  and a PEM header are still flagged.
