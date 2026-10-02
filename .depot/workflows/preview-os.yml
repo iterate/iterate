@@ -54,7 +54,7 @@
 # whose head would carry the result (docs/depot-ci.md#run-ci-without-a-pr).
 # slow-rows = run | skip overrides what the PR's paths and label say about the rows tagged `slow`:
 # `--input action=e2e --input slow-rows=run` runs them against the PR's newest deployment.
-# apps = all | none (the apps on top: dash, agents, notes, docs, voice, kit, admin). Pull-request runs use
+# apps = all | none (the apps on top: dash, agents, notes, docs, voice, admin). Pull-request runs use
 # all so every client is usable against the deployment's core/os.
 #
 # Concurrency per PR. The PR's next push cancels the run in progress, in whatever job, since its
@@ -98,7 +98,7 @@ on:
         type: string
         default: deploy
       apps:
-        description: "The apps on top (dash, agents, notes, docs, voice, kit, admin): all = every client, none"
+        description: "The apps on top (dash, agents, notes, docs, voice, admin): all = every client, none"
         required: false
         type: string
         default: all

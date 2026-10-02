@@ -55,7 +55,7 @@ import {
   cloudflareAccounts,
   dashEnvs,
   docsEnvs,
-  kitEnvs,
+  kitWorkers,
   notesEnvs,
   osEnvs,
   PRD_ACCOUNT_ID,
@@ -88,7 +88,8 @@ const PRD_ENVS = [
   docsEnvs.prd,
   adminEnvs.prd,
   voiceEnvs.prd,
-  kitEnvs.prd,
+  // deployed from iterate/kit, still a first-party Worker on this account
+  kitWorkers.prd,
   spaEnvs.prd,
 ];
 const PRD_WORKERS = PRD_ENVS.map((env) => env.workerName);

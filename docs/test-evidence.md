@@ -21,7 +21,6 @@ would need the write, upload and report steps and a line in `testEvidenceJobs`).
 test-results/
 ├── manifest.json                   written last; the result, and every other file with its sha256
 ├── target.json                     the e2e jobs: the preview and the deployment the suites ran against
-├── ctest/junit.xml                 the Test job: Kit's firmware host tests
 ├── ci-telemetry/
 │   ├── raw/<runner>.json           each runner's telemetry: one per Vitest workspace, one for Playwright
 │   └── manifest.json               the finalizer's completeness check (test-telemetry-finalizer.ts)
@@ -47,16 +46,15 @@ a different tree than the deploy built: compare `target.deploymentId` with the d
 
 ### How each producer writes into it
 
-| Producer                                                                          | Writes                                                              | How it gets there                                                                                      |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                    |
-| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
-| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `scripts/os/preview.ts` per suite (from `testEvidencePaths`)         |
-| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `test/playwright.config.ts`, from `testEvidencePaths`                                                  |
-| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/test-telemetry-finalizer.ts`            |
-| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |
-| Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
-| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs          |
+| Producer                                                                          | Writes                                                              | How it gets there                                                                              |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                            |
+| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                              |
+| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `scripts/os/preview.ts` per suite (from `testEvidencePaths`) |
+| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `test/playwright.config.ts`, from `testEvidencePaths`                                          |
+| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/test-telemetry-finalizer.ts`    |
+| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                    |
+| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs  |
 
 Videos are off in CI (retained videos left ffmpeg workers holding the job open). Without
 `TEST_TELEMETRY_ARTIFACT_DIR` and `FLAKE_RECORD_DIR` nothing is recorded, so a laptop run records
@@ -64,8 +62,8 @@ nothing.
 
 ### What CI does
 
-In each of those jobs, after the steps that run tests (the Test job's Vitest and Kit's CTest side by
-side, a suite job's suite):
+In each of those jobs, after the steps that run tests (the Test job's Vitest, a suite job's
+suite):
 
 1. **Check test telemetry, write the suite summary and the test evidence manifest**
    (`node scripts/ci/test-evidence.ts finalize --flake-suites <suite>`, `--cancelled` when the job
@@ -75,7 +73,7 @@ side, a suite job's suite):
    upload's Node starts from. First the telemetry finalizer
    ([CI telemetry](ci-test-telemetry.md#test-telemetry-artifacts)), then the manifest: the
    workflow passes the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
-   (`tests=… kit-host-tests=…` in the Test job), and it hashes every file and writes
+   (`tests=…` in the Test job), and it hashes every file and writes
    `manifest.json`. Its outputs say what the folder holds, each once it is true: `evidence=kept`,
    `manifest=written`, and `playwright-report=written`. The steps after it read those instead of
    `hashFiles()`, which costs the runner about 0.2 s per condition, one at a time
@@ -125,8 +123,8 @@ never reached R2.
   started still has one.
 - `result`: `cancelled`; `incomplete` when the finalizer found a workspace missing, a runner cut
   short or another attempt's artifact, or a step that runs tests was skipped or passed no outcome;
-  `failed` when such a step failed or a runner reported a failure (a failed Kit CTest step counts,
-  though it reports no telemetry); otherwise `passed`.
+  `failed` when such a step failed or a runner reported a failure (a failed step counts, though it
+  reports no telemetry); otherwise `passed`.
 - `completeness` is the finalizer's own check, copied.
 - `target` is `target.json`, in the e2e jobs only. The client apps answer `/healthz` with `ok`, so
   only the OS deployment is recorded.

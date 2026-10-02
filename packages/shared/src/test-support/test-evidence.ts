@@ -28,8 +28,6 @@ export const testEvidencePaths = {
   playwrightResults: "test-results/playwright-results.json",
   /** A CI shard's Playwright blob report, which the first shard merges into the HTML report. */
   playwrightBlob: "test-results/playwright-blob",
-  /** Kit's firmware host tests, as CTest's JUnit XML (the Test job's `--output-junit`). */
-  ctestJunit: "test-results/ctest/junit.xml",
   /** A `TestEvidenceTarget`: the deployment an e2e job's suites ran against. */
   target: "test-results/target.json",
 };

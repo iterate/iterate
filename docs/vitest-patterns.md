@@ -78,7 +78,6 @@ Each kind of test has one shape:
 | Config conformance       | `depot-workflows.test.ts`, `lint/oxlintrc-*.test.ts` | Only invariants that guard cost or security, each a rule over every workflow or config                                                                               |
 | Lint rule                | `lint/oxlint-plugin-*.test.ts`                       | Rows of `{ name, source, reports }`, each source a template literal, one body through `lintOne`                                                                      |
 | Test support's own tests | `packages/shared/src/test-support/`                  | A fake run from one typed builder per reporter                                                                                                                       |
-| Firmware host            | `apps/kit/firmware/tests/*_test.c`                   | `<assert.h>` (CMake passes `-UNDEBUG`), shared fixtures in a header (`capnweb_capture.h`), no per-file assert macros                                                 |
 
 ## Test-style lint rules
 

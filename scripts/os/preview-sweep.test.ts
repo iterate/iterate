@@ -26,9 +26,9 @@ import {
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 
-test("a deployment's members: its eight workers, then core/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
+test("a deployment's members: its seven workers, then core/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
   expect(previewMemberSuffixes(kvBindings())).toEqual({
-    worker: ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"],
+    worker: ["os", "dash", "agents", "notes", "docs", "admin", "voice"],
     kv: ["os-itx-kv", "os-oauth-kv"],
     r2: ["os-files"],
     d1: ["os-db"],

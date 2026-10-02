@@ -48,13 +48,9 @@ jobs:
       - name: Setup
         id: setup
         uses: ./.depot/actions/setup
-      # THE TESTS, side by side (docs/depot-ci.md#parallel-steps): `pnpm test`, and Kit's firmware
-      # compiled for the host (ASan/UBSan) and run under CTest, which needs none of the other's
-      # outputs and builds in its own directory (apps/kit/firmware/.build/host). `fail-fast: false`,
-      # so a failure of either never cancels the other. Kit is its own step, not part of Kit's
-      # `test`, so `pnpm test` runs where cmake is missing; the stock image has cmake and GCC's
-      # sanitizers. At the lowest priority (`nice`): the compiler gets only the CPU vitest leaves,
-      # so no timing-sensitive row waits on it.
+      # THE TESTS, beside the evidence upload's Doppler fetch, which needs nothing of them
+      # (docs/depot-ci.md#parallel-steps). `fail-fast: false`, so a failure of either never cancels
+      # the other.
       - fail-fast: false
         parallel:
           # No secrets: no unit test reads one. The telemetry's kind and suite are the reporters'
@@ -70,14 +66,6 @@ jobs:
               TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
               TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
             run: pnpm test
-          # `!cancelled()`, so a failed setup does not hide the firmware result. CTest's JUnit XML
-          # goes into the test evidence folder (docs/test-evidence.md).
-          - name: Run Kit firmware host tests
-            id: kit-host-tests
-            if: ${{ !cancelled() }}
-            run: |
-              mkdir -p test-results/ctest
-              nice -n 19 pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/test-results/ctest/junit.xml"
           # The evidence upload's secrets, fetched beside the tests (docs/test-evidence.md#what-ci-does).
           - name: Fetch the evidence upload's secrets
             continue-on-error: true
@@ -93,7 +81,7 @@ jobs:
         if: always()
         timeout-minutes: 2
         env:
-          TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}
+          TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }}
           # Node's compile cache, which the upload's Node then starts from
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

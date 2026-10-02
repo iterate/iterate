@@ -1,7 +1,0 @@
-dependencies:
-  esp32-camera:
-    public: true
-    version: ^2.0.11
-  # The tuned VOIP AEC engine (DiOS/athena-signal) the processor wraps.
-  espressif/esp-sr: "==2.4.7"
-  idf: ">=6.1"

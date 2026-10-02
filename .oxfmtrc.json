@@ -22,7 +22,6 @@
     "routeTree.gen.ts",
     "packages/ui/registry.json",
     "**/.generated/",
-    "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
     "packages/ai-linter/src/fixtures/jev-cases.json",
     ".github/workflows/",
     ".git/",

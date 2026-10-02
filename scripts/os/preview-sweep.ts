@@ -5,7 +5,7 @@
 //
 // A DEPLOYMENT (envs.ts `previewDeployment`) is every worker and resource named
 // `<prefix>-<sha7>-<member>`: the workers `…-os`, `…-dash`, `…-agents`, `…-notes`, `…-admin`,
-// `…-voice`, `…-kit`, and core/os's resources `…-os-oauth-kv`, `…-os-itx-kv`, `…-os-files`,
+// `…-voice`, and core/os's resources `…-os-oauth-kv`, `…-os-itx-kv`, `…-os-files`,
 // `…-os-db`, `…-os-repos`. Nothing else on the account has that shape: main on dev is `os`,
 // `os-parent-…`; prd lives on another account; local dev's are `os-dev-…`. A deployment is judged
 // by its newest member's creation stamp (KV has none), so one half deployed or half deleted is

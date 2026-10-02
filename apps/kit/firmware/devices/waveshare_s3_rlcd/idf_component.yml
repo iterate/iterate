@@ -1,3 +1,0 @@
-dependencies:
-  espressif/esp_codec_dev: "~1.5.6"
-  idf: ">=6.1"

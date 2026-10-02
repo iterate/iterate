@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
-import { dashEnvs, docsEnvs, kitEnvs, notesEnvs } from "../../envs.ts";
+import { dashEnvs, docsEnvs, notesEnvs, voiceEnvs } from "../../envs.ts";
 import { ownZones, startAppWorkerConfig } from "./start-app.ts";
 
 test("a per-commit deployment's app is a worker of its own, signs in against that deployment's core/os and links to its apps", () => {
@@ -79,7 +79,6 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
       notes: "https://notes.iterate.com",
       admin: "https://admin.iterate.com",
       voice: "https://voice.iterate.com",
-      kit: "https://k.iterate.com",
     },
     pkgPrNewRef: "main",
   });
@@ -99,21 +98,25 @@ test("main on dev (the app's `preview` build) signs in against main on dev's cor
       notes: "https://notes.iterate-dev-preview.workers.dev",
       admin: "https://admin.iterate-dev-preview.workers.dev",
       voice: "https://voice.iterate-dev-preview.workers.dev",
-      kit: "https://kit.iterate-dev-preview.workers.dev",
     },
   });
 });
 
 test("the app reads the config it is deployed with as written, and a laptop's .dev.vars names a local platform on top", () => {
   const { vars } = startAppWorkerConfig(
-    { name: "kit", root: new URL("file:///apps/kit/"), dopplerProject: "kit", envs: kitEnvs },
+    {
+      name: "voice",
+      root: new URL("file:///apps/voice/"),
+      dopplerProject: "voice",
+      envs: voiceEnvs,
+    },
     "prd",
     undefined,
   );
   expect(startAppConfigOf({ ...vars })).toMatchObject({
     urls: { os: "https://os.iterate.com", dash: "https://dash.iterate.com" },
     denyZones: ownZones(),
-    posthogProjectKey: kitEnvs.prd.posthogProjectKey,
+    posthogProjectKey: voiceEnvs.prd.posthogProjectKey,
   });
   // local dev starts from prd's config (no env) and overrides one key, keeping the rest
   const local = startAppWorkerConfig(
@@ -151,19 +154,5 @@ test("every request starts the app's Worker but its static files: vite's /assets
   );
   expect(dash.assets).toMatchObject({
     run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg", "!/logos/*"],
-  });
-  // a directory of public files is one rule
-  const kit = startAppWorkerConfig(
-    {
-      name: "kit",
-      root: new URL("../../apps/kit/", import.meta.url),
-      dopplerProject: "kit",
-      envs: kitEnvs,
-    },
-    "prd",
-    undefined,
-  );
-  expect(kit.assets).toMatchObject({
-    run_worker_first: expect.arrayContaining(["/*", "!/assets/*", "!/favicon.svg", "!/vendors/*"]),
   });
 });

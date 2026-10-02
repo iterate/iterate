@@ -9,11 +9,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
-import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../envs.ts";
+import { ciReportsEnvs, kitWorkers, osEnvs, previewDeployment, spaEnvs } from "../../envs.ts";
 import { agents } from "../../apps/agents/scripts/app.ts";
 import { dash } from "../../apps/dash/scripts/app.ts";
 import { docs } from "../../apps/docs/scripts/app.ts";
-import { kit } from "../../apps/kit/scripts/app.ts";
 import { notes } from "../../apps/notes/scripts/app.ts";
 import { admin } from "../../apps/admin/scripts/app.ts";
 import { voice } from "../../apps/voice/scripts/app.ts";
@@ -30,7 +29,7 @@ export const MAIN_ON_DEV = osEnvs.preview!;
 export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
 /** The apps on top, each deployed beside core/os as `<deployment>-<app>`. */
-export const APPS: StartApp[] = [dash, agents, notes, docs, voice, kit, admin];
+export const APPS: StartApp[] = [dash, agents, notes, docs, voice, admin];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -88,11 +87,12 @@ export function previewDeploymentUrls(name: string) {
 
 // ── what on the account is never a preview's ──────────────────────────────────────────────────
 
-/** envs.ts's workers on the dev/preview account: main on dev (`os`, each app's) and every other
- *  deployment there (the CI reports viewer, the SPA example). The sweep never deletes one. */
+/** envs.ts's workers on the dev/preview account: main on dev (`os`, each app's), every other
+ *  deployment there (the CI reports viewer, the SPA example) and Kit's main, which iterate/kit
+ *  deploys. The sweep never deletes one. */
 export function accountWorkerNames() {
   return new Set(
-    [osEnvs, ...APPS.map((app) => app.envs), spaEnvs, ciReportsEnvs]
+    [osEnvs, ...APPS.map((app) => app.envs), spaEnvs, ciReportsEnvs, kitWorkers]
       .flatMap((envs) => Object.values(envs))
       .filter((env) => env.cloudflareAccountId === MAIN_ON_DEV.cloudflareAccountId)
       .map((env) => env.workerName),
