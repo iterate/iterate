@@ -1,0 +1,42 @@
+# THE PUBLIC COPY OF PACKAGES: scripts/ci/copybara.ts `sync --copy packages`, whose header says when
+# each copy runs and why. A failed run pages nobody; the next one catches up.
+name: Copy to iterate/packages
+permissions:
+  contents: read
+concurrency:
+  # one push to iterate/packages at a time; never interrupt one midway
+  group: copy-packages
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/copy-packages.yml
+      - scripts/ci/copybara.ts
+      - copybara/copy.bara.sky
+      - copybara/packages/**
+      - packages/**
+      - configs/**
+      - LICENSE
+  workflow_dispatch:
+jobs:
+  copybara:
+    name: Copy to iterate/packages
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.depot/actions/setup
+        with:
+          # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Copy up to this commit
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/copybara.ts sync --copy packages --sha "$GITHUB_SHA"

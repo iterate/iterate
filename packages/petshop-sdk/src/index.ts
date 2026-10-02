@@ -1,4 +1,4 @@
-// The pet shop's own SDK, as a vendor would ship one: its capnweb pets API (apps/dummy-petshop
+// The pet shop's own SDK, as a vendor would ship one: its capnweb pets API (internal-packages/dummy-petshop
 // src/capnweb.ts), typed. A project's worker installs it like any npm package and calls the shop
 // with the account's bearer token; the fetch it makes is the worker's own, so on Iterate it goes out
 // through the project's egress.

@@ -282,14 +282,14 @@
       }
     },
     {
-      "files": ["packages/**", "apps/**"],
+      "files": ["packages/**", "internal-packages/**"],
       "rules": {
         "import-js/no-restricted-paths": [
           "error",
           {
             "zones": [
               {
-                "target": ["./packages/**", "./apps/**"],
+                "target": ["./packages/**", "./internal-packages/**"],
                 "from": "./core/os",
                 "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in core/lib; platform-only code stays in core/os. The platform's tests live in test/, which this rule does not cover (core/lib/README.md#the-sdkplatform-line)."
               }

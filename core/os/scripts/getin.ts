@@ -74,7 +74,7 @@ export default async function getin(
   const url = `${server.baseUrl}/.auth/local-sign-in?${new URLSearchParams({ email, next })}`;
   if (!dash)
     console.error(
-      `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG_URLS__OS=${server.baseUrl} in apps/dash/.dev.vars, then \`pnpm --dir apps/dash dev\``,
+      `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG_URLS__OS=${server.baseUrl} in packages/dash/.dev.vars, then \`pnpm --dir packages/dash dev\``,
     );
   if (options.print) return console.log(url);
   console.error(`opening ${next} as ${email}`);

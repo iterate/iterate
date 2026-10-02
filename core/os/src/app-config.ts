@@ -170,7 +170,7 @@ export const AppConfig = z.object({
       os: optionalOrigin,
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
-      /** The dash (apps/dash) — where the landing page (`/`, routes/index.tsx) sends a person, this
+      /** The dash (packages/dash) — where the landing page (`/`, routes/index.tsx) sends a person, this
        *  origin being headless. Blank ⇒ the page names no dash. */
       dash: optionalOrigin,
       /** How projects are reached over HTTP (project-ingress.ts): `subdomains` hangs

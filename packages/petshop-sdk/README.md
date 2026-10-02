@@ -1,6 +1,6 @@
 # @iterate-com/petshop-sdk
 
-The dummy pet shop's SDK (iterate's `apps/dummy-petshop`), shaped like a vendor's: its
+The dummy pet shop's SDK (iterate's `internal-packages/dummy-petshop`), shaped like a vendor's: its
 capnweb pets API, typed. It exists to prove the vendor story end to end: a project's worker lists it
 in `package.json`, imports it by name, and the platform resolves it from npm through esm.sh
 (core/os `context/module-resolution.ts`).

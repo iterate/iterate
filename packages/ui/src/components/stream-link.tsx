@@ -1,5 +1,5 @@
 /** "Stream ↗": from a page to the context its data lives on, in the dash's Contexts page
- *  (apps/dash `/projects/<slug>/contexts/<path>`): the context's events, its processors and their
+ *  (packages/dash `/projects/<slug>/contexts/<path>`): the context's events, its processors and their
  *  live state. The convention for a page that is one context's events (a doc, an agent): this one
  *  quiet link, beside the page's path. It goes through the dash's `/.auth/connect` for the page's
  *  platform, as Agents' link to the config repo does: straight through for the dash's own, a

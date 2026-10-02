@@ -18,7 +18,7 @@ import {
   previewGithubAppPrivateKey,
 } from "../../../core/os/scripts/preview-github-app.ts";
 import { TEST_EMAIL_DOMAIN } from "../../../core/os/src/test-email-domain.ts";
-import { dashScopes } from "../../../apps/dash/src/lib/scopes.ts";
+import { dashScopes } from "../../../packages/dash/src/lib/scopes.ts";
 import { openOperatorSession } from "../../helpers/operator.ts";
 import { test } from "../../helpers/test.ts";
 import { workerBaseUrl } from "../../helpers/worker-base-url.ts";

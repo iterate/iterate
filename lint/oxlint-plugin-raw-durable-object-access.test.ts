@@ -63,7 +63,11 @@ test("raw env.X.getByName is allowed only in core/os's edge entry points and Dur
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
-    { path: "apps/agents/runtime/app.ts", source: 'env.SESSIONS.getByName("s");', reported: false },
+    {
+      path: "packages/agents-app/runtime/app.ts",
+      source: 'env.SESSIONS.getByName("s");',
+      reported: false,
+    },
   ];
   using fixture = createOxlintFixture({
     rules: { "iterate/no-raw-durable-object-binding-access": "error" },

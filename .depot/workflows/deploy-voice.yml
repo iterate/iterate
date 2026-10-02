@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-voice.yml
-      - apps/voice/**
+      - packages/voice-app/**
       # the voice check, upgrade and call client the page runs (@iterate-com/voice/install, /call)
       - packages/voice/**
       - envs.ts
@@ -38,9 +38,9 @@ jobs:
         with:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      - name: Deploy apps/voice
+      - name: Deploy packages/voice-app
         id: deploy
-        working-directory: apps/voice
+        working-directory: packages/voice-app
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run-script deploy --env prd

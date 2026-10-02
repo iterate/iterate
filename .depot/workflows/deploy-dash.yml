@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-dash.yml
-      - apps/dash/**
+      - packages/dash/**
       - envs.ts
       - scripts/lib/**
       - core/lib/**
@@ -37,9 +37,9 @@ jobs:
         with:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      - name: Deploy apps/dash
+      - name: Deploy packages/dash
         id: deploy
-        working-directory: apps/dash
+        working-directory: packages/dash
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run-script deploy --env prd

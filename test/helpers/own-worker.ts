@@ -1,7 +1,7 @@
 // helpers/own-worker.ts — a worker a test file boots for ITSELF, beside the shared one every other
 // file speaks to through helpers/client.ts. Two reasons to own one: reading the worker's console
 // (wrangler's `getLogs()` is worker-global, so nobody else may drive it — push-delivery-no-dropped-warns
-// and apps/agents agents-partner-response-stream), or a non-default ingress routing (path-ingress).
+// and packages/agents-app agents-partner-response-stream), or a non-default ingress routing (path-ingress).
 // Same config (helpers/worker-config.ts), same capnweb-over-WebSocket endpoint.
 
 import { newWebSocketRpcSession } from "capnweb";

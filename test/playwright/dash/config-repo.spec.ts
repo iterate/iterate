@@ -1,5 +1,5 @@
 // The Dash's project overview links the config repo (`/repos/config`) to a git remote and pulls and
-// pushes its main (apps/dash/src/routes/_auth/projects/$slug/index.tsx, `itx.repos.get(path)`'s
+// pushes its main (packages/dash/src/routes/_auth/projects/$slug/index.tsx, `itx.repos.get(path)`'s
 // `setOrigin`, `pull` and `push`). A fresh project's seed and a public GitHub repository are
 // unrelated histories, so the first pull finds the two mains diverged and the person keeps one.
 import { test } from "../../helpers/test.ts";

@@ -75,7 +75,7 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
 });
 
 test("a socket opened BARE authenticates in-band — the token in the authenticate call — and is bound to that grant: a wrong token, a second token and a cookie-less cookie form are refused; the HTTP probe stays a 401", async () => {
-  // THE STATIC-PAGE ARCHETYPE (apps/spa): a browser cannot put a header on a WebSocket, so the page
+  // THE STATIC-PAGE ARCHETYPE (packages/spa): a browser cannot put a header on a WebSocket, so the page
   // opens /api with no credential and presents its OAuth access token IN `authenticate` — capnweb's
   // own pattern. The same gate, the same session; nothing is reachable before the call resolves.
   const slug = freshDnsSafeProjectSlug("in-band");

@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-admin.yml
-      - apps/admin/**
+      - packages/admin/**
       - envs.ts
       - scripts/lib/**
       - core/lib/**
@@ -37,9 +37,9 @@ jobs:
         with:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      - name: Deploy apps/admin
+      - name: Deploy packages/admin
         id: deploy
-        working-directory: apps/admin
+        working-directory: packages/admin
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run-script deploy --env prd

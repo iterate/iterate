@@ -17,7 +17,7 @@ export function plainWorkerConfig(
   const env = envName ? worker.envs[envName] : undefined;
   if (envName && !env)
     throw new Error(
-      `apps/${worker.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(worker.envs).join(", ")}`,
+      `${worker.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(worker.envs).join(", ")}`,
     );
   return {
     name: env?.workerName || worker.name,

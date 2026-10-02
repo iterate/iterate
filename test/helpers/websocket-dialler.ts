@@ -1,6 +1,6 @@
 // helpers/websocket-dialler.ts — an outbound WebSocket dialled by LOADED CODE with its plain
 // `fetch` (its context's egress), `https://` plus `Upgrade: websocket`: workerd's fetch refuses a
-// `wss://` URL. Against the deployed pet shop's gateways (apps/dummy-petshop src/gateway.ts), from
+// `wss://` URL. Against the deployed pet shop's gateways (internal-packages/dummy-petshop src/gateway.ts), from
 // secret-sockets.e2e.test.ts and instance-lends.e2e.test.ts.
 
 /** `itx`'s loaded code dials `url` with `headers`; after the shop's hello it sends `identify` (when

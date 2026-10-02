@@ -1,15 +1,15 @@
 packages:
   - core/os
-  - apps/dash
-  - apps/agents
-  - apps/notes
-  - apps/docs
-  - apps/admin
-  - apps/voice
-  - apps/spa
-  - apps/browser-extension
-  - apps/dummy-petshop
-  - apps/ci-reports
+  - packages/dash
+  - packages/agents-app
+  - packages/notes
+  - packages/docs-app
+  - packages/admin
+  - packages/voice-app
+  - packages/spa
+  - packages/browser-extension
+  - internal-packages/dummy-petshop
+  - internal-packages/ci-reports
   - packages/ai-linter
   - packages/github-sync
   - packages/docs

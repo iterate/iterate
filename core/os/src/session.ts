@@ -253,7 +253,7 @@ export async function appendPlatformFacts(
  *  the control-plane database has made the write. THE DATABASE IS THE TRUTH of organizations,
  *  members, invitations and projects, and what the dash reads (`organizations.list`, `members`,
  *  `invitations`, `projects.list`); a fact is the record of who did what, and the dash's signal to
- *  read again (apps/dash components/organization-tree.tsx), so it lands after the write it records.
+ *  read again (packages/dash components/organization-tree.tsx), so it lands after the write it records.
  *  Each fact is keyed by this operation (or by its own key: a project is added once), so the one
  *  retry lands it once. */
 function publishOrganizationFacts(

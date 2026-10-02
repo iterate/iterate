@@ -1,7 +1,7 @@
 # @iterate-com/docs
 
 Live co-editing for a project's docs, the markdown files in its repos that
-iterate's Docs app (`apps/docs`) edits. Git stays the source of truth; while a doc is open,
+iterate's Docs app (`packages/docs-app`) edits. Git stays the source of truth; while a doc is open,
 its processor holds the text as a Yjs `Y.Text` and saves it.
 
 - **`DocProcessor`** ([src/processor.ts](src/processor.ts)), one per open doc on the context

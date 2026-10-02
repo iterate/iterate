@@ -12,7 +12,7 @@ export const OsEnv = z.object({
   /** PostHog's project key: the worker's `APP_CONFIG posthogProjectKey`, which the issuer's own
    *  pages start posthog-js with. Unset ⇒ no PostHog. */
   posthogProjectKey: z.string().optional(),
-  /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
+  /** The dash's origin for this deployment (packages/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl: z.string().optional(),
   /** The platform admins (src/app-config.ts `admins`): exact email addresses, not secrets, so in
@@ -69,7 +69,7 @@ export const OsEnv = z.object({
    *  `login.testEmailDomain`): the pet shop's fake sign-ins admit addresses under it alone, and a
    *  PR body's sign-in link pre-fills one of them for an admin. A per-commit deployment's only. */
   testEmailDomain: z.string().optional(),
-  /** The dummy pet shop's origin (apps/dummy-petshop), whose fakes are iterate's own Slack app,
+  /** The dummy pet shop's origin (internal-packages/dummy-petshop), whose fakes are iterate's own Slack app,
    *  Google, X and Cloudflare OAuth clients and GitHub App (./preview-*-app.ts, at this origin), and
    *  people sign in with Google, Cloudflare and GitHub through them. A per-commit deployment's only:
    *  prd's and main on dev's integrations are their Doppler `APP_CONFIG`'s. */

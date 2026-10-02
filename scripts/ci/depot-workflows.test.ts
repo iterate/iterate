@@ -93,11 +93,23 @@ const depotWorkflowFiles = readdirSync(resolve(repoRoot, ".depot/workflows"))
   .filter((file) => file.endsWith(".yml"))
   .map((file) => `.depot/workflows/${file}`);
 
-// Every production deploy workflow is `deploy-<app>.yml` for `apps/<app>`.
+// Every production deploy workflow is `deploy-<app>.yml`, for the folder it deploys. An app's
+// folder is its package's name, which isn't always the app's (packages/docs is Docs' library).
+const deployedFolders: Record<string, string> = {
+  os: "core/os",
+  admin: "packages/admin",
+  agents: "packages/agents-app",
+  dash: "packages/dash",
+  docs: "packages/docs-app",
+  notes: "packages/notes",
+  spa: "packages/spa",
+  voice: "packages/voice-app",
+  "ci-reports": "internal-packages/ci-reports",
+  "dummy-petshop": "internal-packages/dummy-petshop",
+};
 const deploymentWorkflows = depotWorkflowFiles.flatMap((file) => {
   const app = /^\.depot\/workflows\/deploy-(.+)\.yml$/.exec(file)?.[1];
-  // the platform is core/os; every other deployed app is in apps/
-  return app ? [{ file, app, directory: app === "os" ? "core/os" : `apps/${app}` }] : [];
+  return app ? [{ file, app, directory: deployedFolders[app] }] : [];
 });
 
 const workspaceDirectories = (
@@ -111,6 +123,8 @@ test("finds the production deploy workflows", () => {
   expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
     expect.arrayContaining(["os", "dash", "agents", "notes", "docs", "voice", "spa"]),
   );
+  // a new deploy-<app>.yml names its folder in deployedFolders
+  expect(deploymentWorkflows.filter(({ directory }) => !directory)).toEqual([]);
 });
 
 test.each(deploymentWorkflows)(
@@ -216,8 +230,8 @@ test("deploy-spa.yml ignores the root manifests and lockfile: capnweb ships with
   for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
     expect(triggers(paths, file), `${file} does not deploy`).toBe(false);
   }
-  expect(triggers(paths, "apps/spa/public/index.html")).toBe(true);
-  expect(triggers(paths, "apps/browser-extension/public/panel.js")).toBe(true);
+  expect(triggers(paths, "packages/spa/public/index.html")).toBe(true);
+  expect(triggers(paths, "packages/browser-extension/public/panel.js")).toBe(true);
 });
 
 test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {

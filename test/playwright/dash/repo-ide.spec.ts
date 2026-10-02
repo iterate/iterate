@@ -1,4 +1,4 @@
-// The Dash's repo IDE (apps/dash/src/routes/_auth/projects/$slug/repos.$.tsx, the `RepoIde` of
+// The Dash's repo IDE (packages/dash/src/routes/_auth/projects/$slug/repos.$.tsx, the `RepoIde` of
 // packages/ui): a project's repos, one opened as a file tree beside an editor. Edits stay in the
 // browser until Commit sends them as one commit; the repo's history, its commits from anywhere, and
 // the diff of what changed are all on the page.

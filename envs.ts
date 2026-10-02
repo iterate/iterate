@@ -24,7 +24,7 @@ export const PRD_ACCOUNT_ID = cloudflareAccounts.prd.cloudflareAccountId;
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
 export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].cloudflareAccountId;
 
-/** The Doppler project holding core/os's secrets (and apps/spa's deploy credentials): one config per
+/** The Doppler project holding core/os's secrets (and packages/spa's deploy credentials): one config per
  *  `osEnvs` deployment, each inheriting `_shared/<config>`. Every script that deploys, provisions,
  *  previews, erases or seeds an OS deployment reads its secrets from here. */
 export const OS_DOPPLER_PROJECT = "os";
@@ -95,7 +95,7 @@ export const osEnvs: Record<string, OsEnv> = {
     dopplerConfig: "prd",
     workerName: "os-prd",
     // THE HEADLESS PLATFORM: sign-in, consent, `/api`, the OAuth endpoints — two no-build pages and
-    // the OAuth endpoints, nothing else a person looks at. `dash.iterate.com` is the dash (apps/dash): sessions,
+    // the OAuth endpoints, nothing else a person looks at. `dash.iterate.com` is the dash (packages/dash): sessions,
     // projects and organizations — an ordinary OAuth client of this issuer, like every other app.
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
@@ -136,7 +136,7 @@ export const osEnvs: Record<string, OsEnv> = {
     },
   },
 };
-/** apps/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
+/** packages/dash — THE DASH: sessions and personal access tokens, projects and organizations — the
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
  *  platform at os.iterate.com, on a custom domain (dash.iterate.com). */
 export const dashEnvs = {
@@ -157,7 +157,7 @@ export const dashEnvs = {
   },
 };
 
-/** apps/agents — the agents page (README there); the notes app's shape, on a custom domain. */
+/** packages/agents-app — the agents page (README there); the notes app's shape, on a custom domain. */
 export const agentsEnvs = {
   // AGENTS AT MAIN on the dev/preview account, signed in against osEnvs.preview and
   // redeployed in place with it (preview-parents.yml). A PR's agents is its own worker (`previewDeployment`).
@@ -177,7 +177,7 @@ export const agentsEnvs = {
   },
 };
 
-/** apps/notes — served only under a project's hosts: its config worker (apps/notes/config-worker.ts)
+/** packages/notes — served only under a project's hosts: its config worker (packages/notes/config-worker.ts)
  *  fetches through to this Worker, whose own URL no one signs in on. */
 export const notesEnvs = {
   // NOTES AT MAIN on the dev/preview account, signed in against osEnvs.preview and
@@ -198,7 +198,7 @@ export const notesEnvs = {
   },
 };
 
-/** apps/docs — served only under a project's hosts: a members-only fetch route on the project
+/** packages/docs-app — served only under a project's hosts: a members-only fetch route on the project
  *  fetches through to this Worker, whose own URL no one signs in on (core/os/scripts/preview-config.ts
  *  `proxiedAppRoute` is the route a preview seeds). The prd iterate project routes its `docs` slug
  *  and docs.iterate.com here, so the Worker keeps a workers.dev origin. */
@@ -220,7 +220,7 @@ export const docsEnvs = {
   },
 };
 
-/** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
+/** packages/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
 export const adminEnvs = {
   // ADMIN AT MAIN on the dev/preview account, signed in against osEnvs.preview and
   // redeployed in place with it (preview-parents.yml). A PR's admin is its own worker (`previewDeployment`).
@@ -365,7 +365,7 @@ export const spaEnvs = {
   },
 };
 
-/** apps/dummy-petshop — the fake third party core/os's tests connect to over the real network (a
+/** internal-packages/dummy-petshop — the fake third party core/os's tests connect to over the real network (a
  *  plain Worker, no Start). Production only: its workers.dev origin, no routes, no DNS. */
 export interface DummyPetshopEnv {
   cloudflareAccountId: string;
@@ -384,7 +384,7 @@ export const dummyPetshopEnvs: Record<string, DummyPetshopEnv> = {
   },
 };
 
-/** apps/ci-reports — the viewer for CI traces and Playwright HTML reports (docs/ci-traces.md): a plain
+/** internal-packages/ci-reports — the viewer for CI traces and Playwright HTML reports (docs/ci-traces.md): a plain
  *  Worker serving public Depot artifacts, behind Cloudflare Access. CI tooling, so it lives on the
  *  dev/preview account with CI's Doppler config (_shared/preview supplies both the Cloudflare and the
  *  Depot token): its workers.dev origin, no routes, no DNS. The env is named for its use, not its

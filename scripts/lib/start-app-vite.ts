@@ -23,7 +23,7 @@ export function startAppVitePlugins<Cloudflare, Start, React, Tailwind>(
     viteReact: () => React;
     tailwindcss: () => Tailwind;
   },
-  /** TanStack Start's `router.basepath` (apps/notes routes under its own base path). */
+  /** TanStack Start's `router.basepath` (packages/notes routes under its own base path). */
   router: { basepath?: string } = {},
 ) {
   return [

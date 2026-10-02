@@ -1,4 +1,4 @@
-// The Admin app (apps/admin): a platform admin — a person `APP_CONFIG.admins` lists, signed in with
+// The Admin app (packages/admin): a platform admin — a person `APP_CONFIG.admins` lists, signed in with
 // the `admin` scope — sees every project and person, and opens any context of a project or of the
 // global namespace. And any app signs such an admin in as someone else for an hour, from the
 // issuer's consent ("Sign in as someone else…"): the session is theirs, every event names the admin
@@ -24,7 +24,7 @@ test("an admin opens any project's contexts and the global namespace, and signs 
     .append({ type: "manual/note-added", payload: { text: "the person's own note" } });
 
   await test.step("sign in to the Admin app as the admin", async () => {
-    // the app asks for its scopes (`iterate admin`) as it signs in (apps/admin/src/scopes.ts)
+    // the app asks for its scopes (`iterate admin`) as it signs in (packages/admin/src/scopes.ts)
     await page.goto("/projects");
     // noWaitAfter: Switch account posts to the issuer's logout, navigating to sign-in, which the
     // Email field waits for

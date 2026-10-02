@@ -3,8 +3,8 @@
 // relay and the agent on it and starts the call, pipelined with a subscription for the answer's
 // frames and the call's facts); microphone frames go up as ephemeral `mic-frame` appends, a
 // `keepalive` every 20 s says the caller is still there through a quiet stretch, and hanging up
-// appends `call-ended`. apps/voice's page runs it with the browser's worklets and
-// apps/agents/scripts/voice-call.ts from Node with WAV files; Kit's firmware speaks the same calls
+// appends `call-ended`. packages/voice-app's page runs it with the browser's worklets and
+// packages/agents-app/scripts/voice-call.ts from Node with WAV files; Kit's firmware speaks the same calls
 // in C (iterate/kit's firmware/components/voice/src/voice_loop.c).
 import { z } from "zod";
 import type { IterateContextApi } from "iterate/api";

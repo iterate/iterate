@@ -1,5 +1,5 @@
 // The Notes app's session: Notes is served only through a project's config worker
-// (apps/notes/config-worker.ts), on its host's sign-in — a project host's own grant under subdomains,
+// (packages/notes/config-worker.ts), on its host's sign-in — a project host's own grant under subdomains,
 // the platform's under paths — which the Dash's sessions page ends.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -10,7 +10,7 @@ import { readOsPlaywrightAuthConfig } from "../../helpers/auth-config.ts";
 import { test } from "../../helpers/test.ts";
 import { workerBaseUrl } from "../../helpers/worker-base-url.ts";
 
-// the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/projects.$slug.tsx)
+// the note's textbox is named by the file it edits (packages/notes/src/routes/_auth/projects.$slug.tsx)
 const noteFile = "/repos/config/notes/log.md";
 
 test("the Notes app works through a project config worker, keeps a note, and ending its session in the Dash signs it out there", async ({
@@ -26,7 +26,7 @@ test("the Notes app works through a project config worker, keeps a note, and end
   const { project } = fixture;
   const note = `Written through the project: ${project.slug}`;
   // the app on the project's `notes` routing slug: notes--<project>.<hostname> under subdomains,
-  // <platform>/projects/<project>/notes/ under paths (apps/notes/src/base-path.ts)
+  // <platform>/projects/<project>/notes/ under paths (packages/notes/src/base-path.ts)
   const proxied = (path: string) =>
     projectUrlOf(ingressRouting, workerBaseUrl, {
       project: project.slug,
@@ -46,7 +46,7 @@ test("the Notes app works through a project config worker, keeps a note, and end
   // Notes Worker under test: its host and protocol (the source names production's, over https; a
   // local Notes answers http).
   const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../../apps/notes/config-worker.ts"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../../packages/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   )
     .code.replace('"notes.iterate.com"', JSON.stringify(notes.host))

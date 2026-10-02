@@ -1,4 +1,4 @@
-# The ci-reports viewer (apps/ci-reports, docs/ci-traces.md): the Worker the "CI trace" and
+# The ci-reports viewer (internal-packages/ci-reports, docs/ci-traces.md): the Worker the "CI trace" and
 # "Playwright report" commit statuses open. CI tooling on the dev/preview account; Doppler
 # _shared/preview supplies its Cloudflare credentials and the Depot token it ships as a secret.
 name: Deploy ci-reports
@@ -12,7 +12,7 @@ on:
     branches: [main]
     paths:
       - .depot/workflows/deploy-ci-reports.yml
-      - apps/ci-reports/**
+      - internal-packages/ci-reports/**
       - packages/shared/**
       - core/lib/**
       - envs.ts
@@ -31,7 +31,7 @@ jobs:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
       # The deploy script ends by smoking the viewer's index.
-      - name: Deploy apps/ci-reports
+      - name: Deploy internal-packages/ci-reports
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm --dir apps/ci-reports run-script deploy --env ci
+        run: pnpm --dir internal-packages/ci-reports run-script deploy --env ci

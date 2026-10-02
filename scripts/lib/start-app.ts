@@ -1,6 +1,6 @@
 /**
  * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, admin and voice. An app
- * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
+ * describes itself in its scripts/app.ts (a StartApp below), its vite.config.ts hands the
  * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
  *   deploy                     vite build → wrangler deploy with secrets → /healthz smoke (deploy-app.ts)
@@ -47,9 +47,10 @@ export interface StartAppEnv {
   posthogProjectKey?: string;
 }
 
-/** What apps/<app>/scripts/app.ts declares; everything in this module is the same program over it. */
+/** What an app's scripts/app.ts declares; everything in this module is the same program over it. */
 export interface StartApp {
-  /** "dash": the directory under apps/ and the local-dev worker carry this name. */
+  /** "docs": the key the apps look each other up by and the local-dev worker's name. Not its
+   *  directory: that's `root` (packages/docs-app). */
   name: string;
   /** The Doppler project whose `preview`/`prd` configs deploy it: the app's own ("dash"), or
    *  "_shared" for an app with no secrets of its own. */
@@ -58,6 +59,11 @@ export interface StartApp {
   root: URL;
   /** The app's map in envs.ts. */
   envs: Record<string, StartAppEnv>;
+}
+
+/** The app's directory from the repository root ("packages/docs-app"), for logs and errors. */
+export function appDirectory(app: StartApp) {
+  return path.relative(path.resolve(import.meta.dirname, "../.."), fileURLToPath(app.root));
 }
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
@@ -189,7 +195,7 @@ function linkedEnvironment(
     // merge base with main (pkg.pr.new publishes a PR only when it changes one)
     if (!packagesCommit)
       throw new Error(
-        `apps/${app.name}: ${envName}'s build needs its packages' commit (PUBLISHED_PACKAGE_COMMIT, which preview.ts sets)`,
+        `${appDirectory(app)}: ${envName}'s build needs its packages' commit (PUBLISHED_PACKAGE_COMMIT, which preview.ts sets)`,
       );
     return {
       env: preview.apps[app.name],
@@ -201,16 +207,18 @@ function linkedEnvironment(
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
     throw new Error(
-      `apps/${app.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
+      `${appDirectory(app)}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
     );
   const linked = envName || "prd";
   const platform = osEnvs[linked];
   if (!platform)
-    throw new Error(`apps/${app.name}: envs.ts has no osEnvs.${linked} to sign in against`);
+    throw new Error(`${appDirectory(app)}: envs.ts has no osEnvs.${linked} to sign in against`);
   const appOrigins = Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => {
     const other = envs[linked];
     if (!other)
-      throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
+      throw new Error(
+        `${appDirectory(app)}: envs.ts has no ${linked} environment of the ${name} app`,
+      );
     return [name, other.baseUrl];
   });
   return { env, platform, appOrigins, pkgPrNewRef: "main" };
@@ -238,7 +246,7 @@ async function deploy(app: StartApp, options: { env: string }) {
   await deployApp(getEnv(options.env, app.envs), {
     dopplerProject: app.dopplerProject,
     appRoot: fileURLToPath(app.root),
-    appLabel: `apps/${app.name}`,
+    appLabel: appDirectory(app),
     smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
   });
 }

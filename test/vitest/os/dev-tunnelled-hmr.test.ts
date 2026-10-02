@@ -6,7 +6,7 @@
 // dev server's own HMR serves `vite-hmr` only at its own base, so this socket is the Worker's.
 // The plugin's upgrade handler returns before forwarding any upgrade whose protocol starts with
 // `vite`, so nothing answers it and the page's `[vite] connecting…` never connects
-// (apps/notes/README.md). The row serves a Worker that answers every upgrade, with no platform, so
+// (packages/notes/README.md). The row serves a Worker that answers every upgrade, with no platform, so
 // it goes red the day the plugin forwards the socket; the README's caveat goes with the wrapper.
 
 import { tmpdir } from "node:os";

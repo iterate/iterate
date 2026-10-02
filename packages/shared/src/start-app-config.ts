@@ -26,7 +26,7 @@ export const StartAppConfig = z.object({
        *  resource. */
       os: httpOrigin,
       // THE FIRST-PARTY APPS, what a link from one app to another follows: the dash's directory of
-      // apps (apps/dash/src/apps.ts), the admin app's "View dash as". The same environment's as
+      // apps (packages/dash/src/apps.ts), the admin app's "View dash as". The same environment's as
       // `os`. Blank ⇒ no link: a per-PR preview names only the apps its run deploys, because
       // production does not know the preview's projects.
       dash: optionalOrigin,

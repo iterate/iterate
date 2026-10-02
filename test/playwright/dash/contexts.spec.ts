@@ -1,4 +1,4 @@
-// The Dash's context explorer (apps/dash/src/routes/_auth/projects/$slug/contexts.$.tsx): every
+// The Dash's context explorer (packages/dash/src/routes/_auth/projects/$slug/contexts.$.tsx): every
 // context of a project, from the project's context registry, as a tree beside the context shown
 // (packages/ui context-tree), each opening live in the general-purpose context view (packages/ui
 // context-view), which appends events and reads a long log newest first.

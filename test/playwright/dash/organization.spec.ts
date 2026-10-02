@@ -1,5 +1,5 @@
 // The Dash's organization page (/organizations/<id>): the organization, its members and its open
-// invitation links are the platform's catalog, read from `/api` (apps/dash
+// invitation links are the platform's catalog, read from `/api` (packages/dash
 // components/organization-tree.tsx). A change made anywhere else lands a fact on the organization's
 // own context, and the page reads again without a reload. The fixture's first project minted the
 // organization, named after the email's local part (core/os src/control-plane/catalog.ts).
