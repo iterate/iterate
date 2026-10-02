@@ -5,7 +5,7 @@ size: medium
 
 # Short preview URLs, preview parents deployed from main
 
-**Status:** done, CI green (#3091). Left: review, then the post-merge migration (steps 2–4 under
+**Status:** done, CI green (iterate/iterate#3091). Left: review, then the post-merge migration (steps 2–4 under
 Decisions).
 
 ## Why
@@ -21,7 +21,7 @@ https://pr3065-kit-feedback-todo-kit-preview.iterate-dev-preview.workers.dev
 Cloudflare builds a Worker Preview's URL as `<preview name>-<parent worker>.<subdomain>.workers.dev`.
 Ours are `pr<n>-<branch slug>` + `-os-preview`. The branch slug is noise (the PR number is already
 unique), and `-preview` is a leftover from the numbered preview slots (`os-next-preview-1`, …) that
-predate Worker Previews (#2753).
+predate Worker Previews (iterate/iterate#2753).
 
 Wanted:
 
@@ -58,8 +58,8 @@ just the app against the parent platform (not in this task).
   (`push: main` with the same paths a PR preview runs for, plus `workflow_dispatch` with a `ref`
   input), one job, one concurrency group, never cancelled. It replaces Main OS e2e's `parent` job.
   - Main OS e2e no longer waits for the parent. A preview does not depend on its parent's Durable
-    Object classes: #2888's brand-new preview bound `ControlPlaneDurableObject` while the parent
-    lacked it, redeploying the parent did not fix the existing previews (#2916), and a throwaway
+    Object classes: iterate/iterate#2888's brand-new preview bound `ControlPlaneDurableObject` while the parent
+    lacked it, redeploying the parent did not fix the existing previews (iterate/iterate#2916), and a throwaway
     worker's new preview bound a class its parent never had (measured, see the log).
   - The app-preview fallback that deployed a PR's preview config as a missing parent goes: a missing
     parent is an error that says to run Deploy preview parents.

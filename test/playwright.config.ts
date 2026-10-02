@@ -62,7 +62,7 @@ export default defineConfig({
   // (packages/shared/src/test-support/e2e-policy). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Six browsers use about 2.7 of a 4x16's vCPUs (#3258). CI runs enough shards of six that every
+  // Six browsers use about 2.7 of a 4x16's vCPUs (iterate/iterate#3258). CI runs enough shards of six that every
   // test has a worker from the start (scripts/ci/specs-shards.test.ts).
   workers: process.env.CI ? 6 : 1,
   shard,

@@ -4,7 +4,7 @@
 // it after each e2e run, never beside one (scripts/os/e2e-soak.ts). These budgets used to sit in the
 // e2e rows, where 16 files ran at once against one worker and a latency measured the suite's
 // contention as much as the platform: a 1.6 s whoami against 1.5 s (main f5fdb3cf) and a 582 ms p50
-// against 500 (#2962), each green on its retry, in 2 of 124 e2e jobs.
+// against 500 (iterate/iterate#2962), each green on its retry, in 2 of 124 e2e jobs.
 //
 // Every scenario runs ROUNDS times and its budget holds for the MEDIAN round: a regression moves
 // every round, one platform stall moves one (a whole round 10× slower than the next, seen on

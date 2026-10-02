@@ -3,8 +3,8 @@
 Six `iterate/*` rules keep a test file flat and readable: the file opens with a
 `test(...)`, every test owns its state, and a failure prints the object, not one
 field of it. They were introduced in
-[#1361](https://github.com/iterate/iterate/pull/1361), re-armed in
-[#1965](https://github.com/iterate/iterate/pull/1965), and are armed on every
+[iterate/iterate#1361](https://github.com/iterate/iterate/pull/1361), re-armed in
+[iterate/iterate#1965](https://github.com/iterate/iterate/pull/1965), and are armed on every
 `*.test.ts` and `*.test.tsx` in the repository: each workspace's unit tests, the
 os Workers suite and the e2e suite.
 

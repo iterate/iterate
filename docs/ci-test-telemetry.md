@@ -4,7 +4,7 @@ Two things, kept apart on purpose:
 
 - **CI telemetry in PostHog**: one event per Depot workflow run and one per job attempt, from an
   hourly sync. Nothing per test: per-test events were over 70% of the PostHog project's ingestion,
-  which is why #2494 cut them.
+  which is why iterate/iterate#2494 cut them.
 - **Test telemetry as CI artifacts**: every test runner writes a raw JSON artifact, a finalizer
   checks that every runner left one, and the job keeps them in its
   [test evidence folder](test-evidence.md), in a Depot artifact and in R2, beside the flake records
@@ -68,7 +68,7 @@ Both carry `schema_version: 3` and:
 | `test_run_id`, `test_evidence_uploaded`, `test_evidence_prefix`                | Job attempts of the jobs that upload a [test evidence](test-evidence.md) folder (Test, and the e2e jobs of Preview OS and Main OS e2e) only: the folder's `testrun_<attempt id>`, whether the upload step's line in the attempt's Depot summary names a prefix in `iterate-ci`, and that prefix. `false` whatever kept the folder out of R2 |
 
 Pull requests and branches come from GitHub, because Depot records only the ref it ran. The
-PostHog dashboards from before #2494 (839069, 839068) read the old events and were not rebuilt.
+PostHog dashboards from before iterate/iterate#2494 (839069, 839068) read the old events and were not rebuilt.
 
 Credentials: the Depot organization token `DEPOT_CI_TELEMETRY_TOKEN` in Doppler `_shared/preview`
 (Depot has no read-only token, so it has organization API scope; never reuse a personal login;

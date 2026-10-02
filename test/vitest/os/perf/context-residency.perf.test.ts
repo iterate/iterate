@@ -6,7 +6,7 @@
 // that a context under outside traffic stays resident, that a claimed facet lives out its attempt.
 // Under the e2e run — 16 files, their rows concurrent — those sampled the platform: 3 of 124 e2e jobs
 // saw it stop a facet 0 s and 20 s after its call, stop a claimed facet mid-attempt, and evict a
-// context mid-traffic while the control plane stalled 12.8 s (#2899, #2921, #2939), each green on
+// context mid-traffic while the control plane stalled 12.8 s (iterate/iterate#2899, iterate/iterate#2921, iterate/iterate#2939), each green on
 // its retry.
 //
 // OPT-IN, the crash hunt's way (vitest/os/isolate-ceilings-deployed.e2e.test.ts): `RUN_RESIDENCY_TIMING=1`,
@@ -121,7 +121,7 @@ timed.concurrent(
 // loaded facet serving one every 5 s is never reset in place — and a context reached every 5 s is
 // never evicted, so no birth resets it either. The second half is Cloudflare's, and the reason this
 // row is timed here: under the e2e run the control plane stalled 12.8 s, the requests stopped
-// reaching the context for 16 s, and the next one's birth reset the facet (#2899).
+// reaching the context for 16 s, and the next one's birth reset the facet (iterate/iterate#2899).
 timedDeployed.concurrent(
   "a loaded facet serving outside HTTP requests every 5 s is the same instance throughout",
   async () => {

@@ -5,7 +5,7 @@ size: large
 
 # #error-pulse: fewer pings, one daily dashboard
 
-Status: done. #3502 (fewer pings) merged; #3504 (the daily dashboard) merges with this file moved;
+Status: done. iterate/iterate#3502 (fewer pings) merged; iterate/iterate#3504 (the daily dashboard) merges with this file moved;
 the stale pages are cleaned up. The iterate.com site fix is live
 (config repo commit 528dc1b).
 
@@ -16,7 +16,7 @@ and reply mentions Jonas and Misha. Misha was pinged 65 times on 09-28, 32 on 09
 Since 09-28 midday: prd fault alarm 69 of 119 pings (58%), main e2e 22, post-deploy check 12, PR time
 to green 8.
 
-- **One bug, 18 pings.** 09-30 21:00–23:30 UTC: after #3487 moved apps/os to core/os, the iterate
+- **One bug, 18 pings.** 09-30 21:00–23:30 UTC: after iterate/iterate#3487 moved apps/os to core/os, the iterate
   project's site (iterate.com and every first-level `*.iterate.com` name, envs.ts `projectWildcard`)
   logged `recipe: 404` and answered 500 (6,385 that day, none on 10-01). A scanner was walking made-up
   subdomains (build., api2., inference.:8443) and paths (`/.env`, `/actuator`, `*.php`). The fault
@@ -172,5 +172,5 @@ Design (from mapping every poster, 2026-10-01):
   nothing else sent to the channel. With subdomain grouping it was one reply, but Misha dropped
   grouping since those names 404 now.
 - The site's 500s were `recipe: 404`: the iterate project's worker.ts read the recipe from GitHub
-  raw at a path #3487 moved, and threw when it had no copy. Someone had already fixed RECIPE_URL by
+  raw at a path iterate/iterate#3487 moved, and threw when it had no copy. Someone had already fixed RECIPE_URL by
   10-01.

@@ -115,7 +115,7 @@ function requestOptions(issuer: string) {
 }
 
 /** The issuer's refusal of a code or refresh token, as the person should read it: its status,
- *  OAuth error code and description, so `invalid_grant` reads apart from any other 400 (#3008). */
+ *  OAuth error code and description, so `invalid_grant` reads apart from any other 400 (iterate/iterate#3008). */
 async function tokenResponse(step: string, request: () => Promise<oauth.TokenEndpointResponse>) {
   try {
     return await request();

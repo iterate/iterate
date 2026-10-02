@@ -9,14 +9,14 @@ Six mechanisms keep that from happening. Three release Workers-RPC sessions so a
 nothing behind that holds an actor. Three are the context's own timers and resets for what it holds
 on purpose or cannot stop others from holding.
 
-| #   | Mechanism                             | Ends                                                       | Where                                                          | Since                                |
-| --- | ------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------ |
-| 1   | `getItx` records every pipelined step | loaded and first-party code's hold on its context's values | `core/lib/src/sdk/itx-scope.ts`, lint `iterate/no-raw-itx-get` | #2846, removed #2855, restored #2863 |
-| 2   | `itxAnswerDetachedFromSession`        | a caller's hold on what the context answered               | `src/context/dispatch.ts`, called by the DO's `invoke`         | #2855                                |
-| 3   | `awaitAnswerReleasedIfRejected`       | a rejected call's session                                  | `src/context/dispatch.ts`, called by the step walk             | #2874                                |
-| 4   | The pins' release, 30 s               | borrowed rpc stubs, the library's open sockets             | [`src/context/residency.ts`](../src/context/residency.ts)      | named in #2756                       |
-| 5   | The birth reset                       | unclaimed loaded facets the last incarnation left running  | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`   | #2905                                |
-| 6   | The quiet-period sweep, 60 s          | the same facets, while the context is still resident       | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`         | #2905, clock fixed in #2922          |
+| #   | Mechanism                             | Ends                                                       | Where                                                          | Since                                                                             |
+| --- | ------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 1   | `getItx` records every pipelined step | loaded and first-party code's hold on its context's values | `core/lib/src/sdk/itx-scope.ts`, lint `iterate/no-raw-itx-get` | iterate/iterate#2846, removed iterate/iterate#2855, restored iterate/iterate#2863 |
+| 2   | `itxAnswerDetachedFromSession`        | a caller's hold on what the context answered               | `src/context/dispatch.ts`, called by the DO's `invoke`         | iterate/iterate#2855                                                              |
+| 3   | `awaitAnswerReleasedIfRejected`       | a rejected call's session                                  | `src/context/dispatch.ts`, called by the step walk             | iterate/iterate#2874                                                              |
+| 4   | The pins' release, 30 s               | borrowed rpc stubs, the library's open sockets             | [`src/context/residency.ts`](../src/context/residency.ts)      | named in iterate/iterate#2756                                                     |
+| 5   | The birth reset                       | unclaimed loaded facets the last incarnation left running  | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`   | iterate/iterate#2905                                                              |
+| 6   | The quiet-period sweep, 60 s          | the same facets, while the context is still resident       | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`         | iterate/iterate#2905, clock fixed in iterate/iterate#2922                         |
 
 Mechanisms 4–6 live in one class, `Residency` in [`src/context/residency.ts`](../src/context/residency.ts).
 The context DO forwards its entry points to it and reads the sweep's deadline back for its one alarm
@@ -63,7 +63,7 @@ before its first write: the reset ones after their abort, a claimed or first-par
 FacetHost `FACET_START_WATCHDOG_MS` names every piece.
 
 A birth that only an alarm caused needs the starts too. Its handler may write nothing, but the
-runtime deletes the fired alarm once the handler returns, and that is a commit. #3100 skipped the
+runtime deletes the fired alarm once the handler returns, and that is a commit. iterate/iterate#3100 skipped the
 starts on the sweep's alarm-only wakes. On a preview, all 32 of those wakes whose facet had written
 40 rows before the eviction failed their alarm invocation, and the runtime retried each one.
 
@@ -92,7 +92,7 @@ The sweep's deadline is decided by one pure rule, `decideQuietDeadline`
 Work in flight holds it off: inbound calls, facet calls, script runs and pin calls. A call from
 loaded code (`caller.app`, a loaded worker's fetch) counts as work while in flight but does not
 restart the clock. Otherwise a facet that calls its own context more often than the context would
-evict would never be reset (#2922).
+evict would never be reset (iterate/iterate#2922).
 
 ## Timers, alarms and incarnations
 
@@ -140,7 +140,7 @@ The unit tests are in core; the lint rule and the suites under `test/` are in it
   the context no longer holds runs on past the context's eviction until the sweep, a context under
   5 s of project-host traffic keeps one instance, and a claimed attempt finishes on the instance
   that started it. Under the e2e run these sampled the platform: it stopped facets 0–25 s after
-  their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
-  #2939). The latency guard never runs them.
+  their call and evicted a context mid-traffic while the control plane stalled (iterate/iterate#2899, iterate/iterate#2921,
+  iterate/iterate#2939). The latency guard never runs them.
 - Deployed: `test/vitest/os/facet-abort-storage-reset.e2e.test.ts` pins the raw fault (a `createFailing` tagged
   `slow`).

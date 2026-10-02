@@ -422,11 +422,11 @@ test("a refresh a second after the code exchange reads the grant the exchange wr
 
 // THE PINNED BUG the grant store works around (src/oauth-store.ts): the library's OWN grant storage,
 // with no iterate store in front of it, under the same stale-KV model as the row above. Upstream it is
-// cloudflare/workers-oauth-provider#214 (refresh-token rotation on eventually consistent KV), and #312
+// cloudflare/workers-oauth-provider#214 (refresh-token rotation on eventually consistent KV), and cloudflare/workers-oauth-provider#312
 // (pluggable storage providers, a Durable Object adapter among them) proposes the fix. The exit: when
 // the library ships storage with strongly consistent grants, give this server that option. It then
 // passes, `createFailing` turns the row red, and src/oauth-store.ts and
-// src/control-plane/oauth-grants.ts are deleted. #312 keeps KV the default, so the row cannot turn
+// src/control-plane/oauth-grants.ts are deleted. cloudflare/workers-oauth-provider#312 keeps KV the default, so the row cannot turn
 // red by itself: the `storage` line below is the signal — the day the library has the option, the
 // directive is unused and the typecheck fails, pointing here.
 createFailing(
@@ -441,7 +441,7 @@ createFailing(
       resources: [`${ORIGIN}/api`],
       authorizeEndpoint: "/oauth2/auth",
       tokenEndpoint: "/oauth2/token",
-      // @ts-expect-error — no storage option yet (upstream #312): set it to the strongly consistent one
+      // @ts-expect-error — no storage option yet (cloudflare/workers-oauth-provider#312): set it to the strongly consistent one
       storage: undefined,
     });
     const oauth = server.getOAuthApi(env);

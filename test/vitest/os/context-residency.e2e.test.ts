@@ -391,7 +391,7 @@ test("an SDK facet that reached its context through getItx does not outlive the 
 // its `env.ITX` answer AND beats a timer into its own storage, so its last beat says when it
 // stopped, with no call from here. That it stopped is the platform code's doing and asserted here;
 // that it ran past its context's eviction until the sweep is Cloudflare's, printed here and timed
-// in the opt-in perf file: here the platform stopped it 0 s and 20 s after its call (#2939, #2899),
+// in the opt-in perf file: here the platform stopped it 0 s and 20 s after its call (iterate/iterate#2939, iterate/iterate#2899),
 // with no invocation of the context in between, which no reset of ours can do.
 
 test(
@@ -430,7 +430,7 @@ test(
 // That outside HTTP restarts the clock is decided in the Workers suite
 // (vitest/os-workers/facets.test.ts); that a context under 5 s of traffic keeps one
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
-// plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
+// plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (iterate/iterate#2899).
 
 test(
   "a careless loaded facet calling its own context every 5 s is no longer running a quiet minute and a half after the last outside call",
@@ -495,7 +495,7 @@ test(
 // claim's alarm wakes one mid-attempt, whose birth spares the claimed facet (FacetHost
 // `resetUnclaimedLoadedFacets`) — and the attempt finishes. The sleeper keeps the SDK's rule 3 (what
 // it owes lives in state), so a revive restarts a sleep an instance the platform stopped still owed
-// (#2921 lost one mid-attempt with no reset of ours); that the attempt finishes on the instance
+// (iterate/iterate#2921 lost one mid-attempt with no reset of ours); that the attempt finishes on the instance
 // that started it is Cloudflare's to keep, printed here and timed in the opt-in perf file.
 
 test(

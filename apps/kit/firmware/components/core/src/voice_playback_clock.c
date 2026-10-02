@@ -40,7 +40,7 @@ void iterate_kit_voice_playback_clock_reprime(
    * a new CALL emptied the ring and kept the last call's clock, so the first
    * audio of the new one was measured against an answer minutes old and the
    * catch-up rule deleted it. Measured on the StackChan: 34 frames skipped
-   * with `spkLagMaxMs` at 117,083. A since-deleted host CLI's (#2710) new-turn
+   * with `spkLagMaxMs` at 117,083. A since-deleted host CLI's (iterate/iterate#2710) new-turn
    * flush also reprimed without it. Here, every flush resets it, because
    * every flush reprimes.
    */
@@ -139,7 +139,7 @@ iterate_kit_voice_playback_clock_empty(
      * delivered ahead of the clear that was supposed to precede it.
      *
      * IT IS DONE HERE, NOT BY THE CALLER. When the owners did it beside this
-     * call, a since-deleted host CLI (#2710) had one dry path — live audio —
+     * call, a since-deleted host CLI (iterate/iterate#2710) had one dry path — live audio —
      * that never made the call at all: after a back-office wait its next answer
      * was measured against the previous one, read as nine seconds late, and
      * lost four frames in five for the rest of the turn (prd, 2026-09-09). A
@@ -231,7 +231,7 @@ iterate_kit_voice_playback_clock_frame(
    * is now measured against a clock it never started. Skipping into that
    * chunk recovers 20 ms a frame against arrival at the same rate, so the
    * lag never moves and every frame pays: measured on a since-deleted host
-   * CLI (#2710), four in
+   * CLI (iterate/iterate#2710), four in
    * five frames of a 71-second answer discarded, the listener hearing one
    * block of speech in every hundred milliseconds, for the whole answer.
    * Requiring the backlog to carry the threshold makes "skip until level"

@@ -267,7 +267,7 @@ static void seconds_of_lag_with_only_a_chunk_queued_is_played(void)
 /*
  * AN ANSWER THAT ENDED DOES NOT MAKE THE NEXT ONE LATE.
  *
- * When the board and a since-deleted host CLI (#2710) each carried this reset
+ * When the board and a since-deleted host CLI (iterate/iterate#2710) each carried this reset
  * themselves, each forgot it on one path: the board on ordinary turns (a
  * fifth of every answer after the first, for a week), the CLI on its
  * live-audio dry path (nine seconds of "lag" after a back-office wait, four

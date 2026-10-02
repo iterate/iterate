@@ -2,7 +2,7 @@
 // SILENCE. GitHub builds no test merge commit (`refs/pull/<n>/merge`) for a pull request that
 // conflicts with its base, and Depot starts no workflow without one: the run it records has no
 // commit and no workflows, and the pull request shows no Lint and Typecheck, Test or Preview OS at
-// all (#3004, #3006 and #3007 on 2026-09-24: six such runs, each a head that conflicted with main).
+// all (iterate/iterate#3004, iterate/iterate#3006 and iterate/iterate#3007 on 2026-09-24: six such runs, each a head that conflicted with main).
 //
 // .github/workflows/merges-with-main.yml runs this on `pull_request_target`, which GitHub starts
 // for a conflicted pull request too and Depot does not support, so it is one of the GitHub Actions

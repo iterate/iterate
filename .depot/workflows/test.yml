@@ -23,7 +23,7 @@ jobs:
     # 2026-09-24, the test step took 80 s at the p50 here and 87 s on 4x16 (151 s at three slots),
     # peaking at 14 % memory and 79 % CPU. Lint is the other 8x32 job on a main push: two large
     # sandboxes have ended this job with a no-log "Sandbox terminated before worker reported
-    # completion" (#1952, #2030, July 2026; a retry passed).
+    # completion" (iterate/iterate#1952, iterate/iterate#2030, July 2026; a retry passed).
     runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 20
     steps:

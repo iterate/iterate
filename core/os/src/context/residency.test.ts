@@ -116,7 +116,7 @@ test.for<{
     expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + SWEEP / 2 + SWEEP } },
   },
   {
-    name: "sweep: a call from loaded code ended midway — reset anyway (#2922)",
+    name: "sweep: a call from loaded code ended midway — reset anyway (iterate/iterate#2922)",
     midway: ({ residency }) => {
       residency.inboundCallStarted("other");
       residency.inboundCallEnded(true);

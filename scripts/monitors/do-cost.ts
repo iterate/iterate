@@ -58,7 +58,7 @@ export const ACCOUNTS = [
     label: "dev/preview",
     cloudflare: cloudflareAccounts["dev/preview"],
     // Healthy is 0–100 DO-hours/hour, measured once previews stopped outliving
-    // their run (#2585); one preview relit by a finished run is 2,000–4,000.
+    // their run (iterate/iterate#2585); one preview relit by a finished run is 2,000–4,000.
     // The incident ran 20,000–57,000. ≈ $2.80/hour.
     maxAccountDoHours: 500,
     // ≈ 1,780 DO-hours/hour, 3.6× the ceiling: above every breach between the

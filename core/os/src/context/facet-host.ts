@@ -81,7 +81,7 @@ import { namesAWorker } from "./itx-expression-rewriting.ts";
  *  live facet never re-runs its startup) and the loader's cached entry is too (a fresh loader id
  *  heals at once) — so the recovery (`#recover`) is a restart of both and ONE more attempt,
  *  counted per facet (`facet:<name>:restarts`, shown on `processors.list()`). worker-loader.ts
- *  `loaderIdGenerations` applies the same recovery to dynamic workers (#2288). Remove when the
+ *  `loaderIdGenerations` applies the same recovery to dynamic workers (iterate/iterate#2288). Remove when the
  *  platform is fixed. */
 const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   error instanceof Error &&

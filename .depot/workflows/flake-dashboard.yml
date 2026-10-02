@@ -1,9 +1,9 @@
-# THE FLAKE DASHBOARD (scripts/ci/flake-dashboard/update.ts): recomputes issue #2580 every hour from
+# THE FLAKE DASHBOARD (scripts/ci/flake-dashboard/update.ts): recomputes its GitHub issue every hour from
 # the flake records and suite summaries that CI's test runs keep in R2 (docs/test-evidence.md), and
 # rewrites the issue when its body changed. Nothing is kept between runs. A dispatch with
 # dry-run=true prints the body in the log and writes nothing.
 #
-# #2580 is written as the iterate GitHub App (iterate[bot]; the writer says how). The App's id and
+# The issue is written as the iterate GitHub App (iterate[bot]; the writer says how). The App's id and
 # key have one home, the platform's configuration (Doppler os/prd's APP_CONFIG), which this
 # workflow reads on a schedule or a dispatch only, never on pull_request or push.
 name: Flake dashboard

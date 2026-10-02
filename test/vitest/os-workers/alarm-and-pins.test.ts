@@ -91,7 +91,7 @@ test("QUIESCE THEN EVICT THEN WAKE: the facet re-drives from its durable checkpo
   await enableCounter(ctx);
   // Commit a run of durable events and let the facet drive them fully (so no drive is in flight —
   // an in-flight drive keeps facetWorkInFlight > 0, the release is skipped, the facet stays
-  // materialized, and evict then times out on the #6800 pin).
+  // materialized, and evict then times out on the workerd#6800 pin).
   await s.append({ type: "b/1" }, { type: "b/2" }, { type: "b/3" }, { type: "b/4" });
   await new Promise((r) => setTimeout(r, 300));
 

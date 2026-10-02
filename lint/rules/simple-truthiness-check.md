@@ -34,6 +34,6 @@ can use a narrow `oxlint-disable-next-line iterate/simple-truthiness-check`
 with a concrete explanation. Do not turn numeric presence tests into
 `Number.isFinite` just to satisfy this rule; the rule leaves numbers alone.
 
-Reference: the closed [#2491](https://github.com/iterate/iterate/pull/2491).
+Reference: the closed [iterate/iterate#2491](https://github.com/iterate/iterate/pull/2491).
 This version omits its broad sweep, numeric guard declarations, and unrelated
 length/ternary/optional-chain rewrites.

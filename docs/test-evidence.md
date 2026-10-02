@@ -6,7 +6,7 @@ record is gone after a week. So each test run in CI also writes **one folder, wi
 uploaded straight to R2, into one bucket, `iterate-ci`**. The one reader built is the
 [flake dashboard](https://github.com/iterate/iterate/issues/2580) ([reading it back](#reading-it-back));
 the others (analytics, local runs, skipping CI on a trusted run) are designed in
-[#3110](https://github.com/iterate/iterate/issues/3110).
+[iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110).
 
 ## The evidence folder
 
@@ -145,7 +145,7 @@ never reached R2.
 
 Everything CI keeps in R2 lives in **`iterate-ci`**, on the dev/preview account
 (`ciBucketEnvs.ci` in `envs.ts`), under `evidence/`. `evidence/local/` and `state/` are reserved
-for laptop runs and the guards' state ([#3110](https://github.com/iterate/iterate/issues/3110)).
+for laptop runs and the guards' state ([iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110)).
 No prd data: every CI job can read this bucket, so the context sweep's backups of prd's orphan
 contexts, their whole durable logs, live in `iterate-prd-backups` on the prd account, written with
 prd's own token (`backupBucketEnvs` in `envs.ts`,
@@ -174,7 +174,7 @@ evidence/ci/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>/<pa
   pushed commit's; everything else is `pr`, a laptop's `depot ci run` included.
 - **Only what a Depot OIDC token's claims give** (`ref`, `event_name`, `iat`, `job_id`), so a notary
   that mints credentials later can derive everything down to `job=<job_id>/` itself
-  ([#3110](https://github.com/iterate/iterate/issues/3110)).
+  ([iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110)).
 - The `key=value` segments are Hive-style, for DuckDB's `hive_partitioning`.
 
 ### Addressed by run, verified by content
@@ -216,7 +216,7 @@ is listed.
 
 ### Sizes and costs
 
-Passing runs of [#3247](https://github.com/iterate/iterate/pull/3247) on 2026-09-26:
+Passing runs of [iterate/iterate#3247](https://github.com/iterate/iterate/pull/3247) on 2026-09-26:
 
 | Job attempt (passing) | Objects | Bytes   | Of which                                                                                   |
 | --------------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
@@ -242,7 +242,7 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
   any more.
 - `state/`: never deleted. Nothing in CI deletes objects.
 - **No bucket lock is set** (30 days on `trust=main/` would stop even CI's token deleting them);
-  whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
+  whether to set it is open ([iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110)).
 
 ### Credentials
 
@@ -257,7 +257,7 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
   holding `DOPPLER_TOKEN` can read it, pull request jobs included. Write-once PUTs are no defence
   against it. That is acceptable while evidence proves nothing; before evidence can skip CI, jobs
   get credentials scoped to their own prefix, from Depot OIDC and a notary Worker
-  ([#3110](https://github.com/iterate/iterate/issues/3110)).
+  ([iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110)).
 - **Traces**: a failing run's `trace.zip` holds the browser's network traffic, preview sign-in
   included. The bucket is private, but `public-playwright-report`, the same folder as a Depot
   artifact, already shows it to anyone Cloudflare Access lets into the viewer.
@@ -280,7 +280,7 @@ Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN` and
    doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle list iterate-ci
    ```
 
-   No bucket lock is set ([#3110](https://github.com/iterate/iterate/issues/3110) has the commands).
+   No bucket lock is set ([iterate/iterate#3110](https://github.com/iterate/iterate/issues/3110) has the commands).
 
 2. **The upload.** A step of `test.yml`, `preview-os.yml` and `main-os-e2e.yml`,
    with no new secret. Check a run

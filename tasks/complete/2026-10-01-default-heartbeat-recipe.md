@@ -5,11 +5,11 @@ size: small
 
 # The heartbeat is a recipe in the default template; the default is a build guarantee
 
-**Status:** done, in review (#3501). Heartbeat folded into default; the build fails without
+**Status:** done, in review (iterate/iterate#3501). Heartbeat folded into default; the build fails without
 `core/configs/default` and lists it first; the consent page and dash use that, no fallback.
 Left: CI (e2e rows and browser specs weren't run locally).
 
-Small cleanup after #3496, which moved core's templates to `core/configs/` and made every build
+Small cleanup after iterate/iterate#3496, which moved core's templates to `core/configs/` and made every build
 bake them.
 
 ## 1. Fold `core/configs/heartbeat` into `core/configs/default`
@@ -33,7 +33,7 @@ minutes and repairs what it finds.
 The consent page (`core/os/src/consent-page.server.ts`) and the dash's New project sheet
 (`apps/dash/src/routes/_auth/projects/index.tsx`) look for the preset whose folder is `default` and
 fall back to the minimal config ("Blank" in the dash) when there is none. That fallback dates from
-when templates were a build input and a bare core build had no default. Since #3496, every build
+when templates were a build input and a bare core build had no default. Since iterate/iterate#3496, every build
 bakes `core/configs/default`, so the fallback only runs in a fork that deleted the folder.
 
 Decision: no fallback. A fork that deletes `default/` should learn at build time what depends on
@@ -51,7 +51,7 @@ it, not silently give every new signup a bare project with no agents.
 ## Also: `?template=<name>` in the dash
 
 The dash matches `?template=<name>` against `configs/<name>`, but core's templates moved to
-`core/configs/<name>` in #3496, so the PR preview's "minimal" quick-launch link opens with Default
+`core/configs/<name>` in iterate/iterate#3496, so the PR preview's "minimal" quick-launch link opens with Default
 selected. Match on the folder name instead.
 
 - [x] `templateFields` matches the preset's folder name _(`?template=default` needs no special case now either)_
